@@ -1,9 +1,8 @@
 require('dotenv').config();
 const { App } = require('@slack/bolt');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Groq = require('groq-sdk');
 const axios = require('axios');
 
-// Initialize Slack app
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   signingSecret: process.env.SLACK_SIGNING_SECRET,
@@ -11,11 +10,8 @@ const app = new App({
   appToken: process.env.SLACK_APP_TOKEN,
 });
 
-// Initialize Gemini
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// ─── SPOTIFY TOKEN ───────────────────────────────────────
 async function getSpotifyToken() {
   const res = await axios.post(
     'https://accounts.spotify.com/api/token',
@@ -36,7 +32,6 @@ async function getSpotifyToken() {
   return res.data.access_token;
 }
 
-// ─── SPOTIFY SEARCH ──────────────────────────────────────
 async function getTrackFeatures(trackName) {
   try {
     const token = await getSpotifyToken();
@@ -44,18 +39,14 @@ async function getTrackFeatures(trackName) {
       headers: { Authorization: `Bearer ${token}` },
       params: { q: trackName, type: 'track', limit: 1 },
     });
-
     const track = search.data.tracks.items[0];
     if (!track) return null;
-
     const features = await axios.get(
       `https://api.spotify.com/v1/audio-features/${track.id}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
-
     const keys = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-    const modes = ['Minor', 'Major'];
-
+    const modes = ['Minor','Major'];
     return {
       name: track.name,
       artist: track.artists[0].name,
@@ -72,21 +63,22 @@ async function getTrackFeatures(trackName) {
   }
 }
 
-// ─── GEMINI AI ────────────────────────────────────────────
-async function askGemini(prompt) {
+async function askAI(prompt) {
   try {
-    const result = await model.generateContent(prompt);
-    return result.response.text();
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1024,
+    });
+    return response.choices[0].message.content;
   } catch (err) {
-    console.error('Gemini error:', err.message);
-    return 'Sorry, AI is unavailable right now. Try again in a moment.';
+    console.error('Groq error:', err.message);
+    return null;
   }
 }
 
-// ─── /musico COMMAND ─────────────────────────────────────
 app.command('/musico', async ({ command, ack, respond }) => {
   await ack();
-
   const input = command.text.trim();
 
   if (!input) {
@@ -98,115 +90,103 @@ app.command('/musico', async ({ command, ack, respond }) => {
 
   const lower = input.toLowerCase();
 
-  // IDEAS
   if (lower.startsWith('ideas')) {
     const genre = input.slice(5).trim() || 'general';
     await respond({ text: '🎵 Generating track ideas...' });
-    const response = await askGemini(
-      `You are Musico, an expert AI music producer assistant. Generate 5 creative and unique track title ideas with brief concept descriptions for this genre/mood: "${genre}". Format each as: 🎵 *Title* — concept description. Be specific and inspiring.`
+    const response = await askAI(
+      `You are Musico, an expert AI music producer assistant. Generate 5 creative track title ideas with brief concept descriptions for: "${genre}". Format each as: 🎵 *Title* — concept description.`
     );
-    await respond({ text: response });
+    await respond({ text: response || 'Could not generate ideas. Try again!' });
     return;
   }
 
-  // FEEDBACK
   if (lower.startsWith('feedback')) {
     const description = input.slice(8).trim();
     if (!description) {
-      await respond({ text: '❗ Please describe your mix. Example: `/musico feedback My trap beat at 140bpm feels muddy in the low end`' });
+      await respond({ text: '❗ Please describe your mix. Example: `/musico feedback My trap beat at 140bpm feels muddy`' });
       return;
     }
     await respond({ text: '🎚️ Analyzing your mix...' });
-    const response = await askGemini(
-      `You are Musico, a professional mixing engineer and music producer AI. Give detailed, actionable mixing feedback for this track description: "${description}". Include specific advice on: EQ, compression, stereo width, frequency balance, and arrangement. Use music production terminology. Format with clear sections using emojis.`
+    const response = await askAI(
+      `You are Musico, a professional mixing engineer AI. Give detailed mixing feedback for: "${description}". Include advice on EQ, compression, stereo width, frequency balance. Use emojis and clear sections.`
     );
-    await respond({ text: response });
+    await respond({ text: response || 'Could not analyze. Try again!' });
     return;
   }
 
-  // REFERENCE TRACK
   if (lower.startsWith('reference')) {
     const trackQuery = input.slice(9).trim();
     if (!trackQuery) {
-      await respond({ text: '❗ Please provide a track name. Example: `/musico reference Blinding Lights - The Weeknd`' });
+      await respond({ text: '❗ Example: `/musico reference Blinding Lights - The Weeknd`' });
       return;
     }
     await respond({ text: `🔍 Looking up "${trackQuery}" on Spotify...` });
-
     const features = await getTrackFeatures(trackQuery);
 
     if (features) {
-      const spotifyInfo = `Track: ${features.name} by ${features.artist}\nBPM: ${features.bpm}\nKey: ${features.key}\nEnergy: ${features.energy}%\nDanceability: ${features.danceability}%\nLoudness: ${features.loudness} dB\nValence (happiness): ${features.valence}%`;
-
-      const response = await askGemini(
-        `You are Musico, a professional mixing engineer. A music producer wants to achieve the sound of this reference track. Here are its real Spotify audio features:\n\n${spotifyInfo}\n\nGive detailed, actionable advice on how to achieve this sound in their own production. Cover: tempo and groove, key and harmonic choices, energy and arrangement, mixing targets (loudness, EQ), and overall vibe. Be specific and professional.`
+      const spotifyInfo = `Track: ${features.name} by ${features.artist}\nBPM: ${features.bpm}\nKey: ${features.key}\nEnergy: ${features.energy}%\nDanceability: ${features.danceability}%\nLoudness: ${features.loudness} dB\nValence: ${features.valence}%`;
+      const response = await askAI(
+        `You are Musico, a professional mixing engineer. Give advice on achieving the sound of this track based on its real Spotify data:\n\n${spotifyInfo}\n\nCover: tempo, key, energy, mixing targets, and overall vibe. Be specific and professional.`
       );
-
       await respond({
-        text: `🎵 *Reference: ${features.name} by ${features.artist}*\n\n📊 *Real Spotify Data:*\n• BPM: ${features.bpm}\n• Key: ${features.key}\n• Energy: ${features.energy}%\n• Danceability: ${features.danceability}%\n• Loudness: ${features.loudness} dB\n• Valence: ${features.valence}%\n\n🎛️ *How to achieve this sound:*\n\n${response}`,
+        text: `🎵 *${features.name} by ${features.artist}*\n\n📊 *Spotify Data:*\n• BPM: ${features.bpm}\n• Key: ${features.key}\n• Energy: ${features.energy}%\n• Danceability: ${features.danceability}%\n• Loudness: ${features.loudness} dB\n• Valence: ${features.valence}%\n\n🎛️ *How to achieve this sound:*\n\n${response || 'Could not generate advice. Try again!'}`,
       });
     } else {
-      const response = await askGemini(
-        `You are Musico, a professional mixing engineer. Give detailed advice on how to achieve the sound of "${trackQuery}". Cover: tempo and groove, key and harmonic choices, energy and arrangement, mixing approach, and overall vibe. Be specific and professional.`
+      const response = await askAI(
+        `You are Musico, a professional mixing engineer. Give detailed advice on achieving the sound of "${trackQuery}". Cover tempo, key, mixing approach, and vibe.`
       );
-      await respond({ text: `🎛️ *Reference Analysis: ${trackQuery}*\n\n${response}` });
+      await respond({ text: `🎛️ *Reference: ${trackQuery}*\n\n${response || 'Could not analyze. Try again!'}` });
     }
     return;
   }
 
-  // BPM
   if (lower.startsWith('bpm')) {
     const mood = input.slice(3).trim() || 'general';
-    await respond({ text: '🥁 Calculating BPM and key suggestions...' });
-    const response = await askGemini(
-      `You are Musico, an expert music producer AI. For the mood/genre "${mood}", suggest: the ideal BPM range, the best musical keys, chord progressions that work well, and the typical song structure. Format with clear sections and be specific with numbers.`
+    await respond({ text: '🥁 Calculating suggestions...' });
+    const response = await askAI(
+      `You are Musico, an expert music producer AI. For "${mood}", suggest: ideal BPM range, best keys, chord progressions, and typical song structure. Be specific with numbers.`
     );
-    await respond({ text: response });
+    await respond({ text: response || 'Could not generate. Try again!' });
     return;
   }
 
-  // TIPS
   if (lower.startsWith('tips')) {
-    const topic = input.slice(4).trim() || 'general music production';
-    await respond({ text: '💡 Getting production tips...' });
-    const response = await askGemini(
-      `You are Musico, an expert music producer AI. Give 5 professional, actionable production tips about "${topic}". Be specific, use real techniques and tool names that producers use. Format each tip with an emoji and bold title.`
+    const topic = input.slice(4).trim() || 'music production';
+    await respond({ text: '💡 Getting tips...' });
+    const response = await askAI(
+      `You are Musico, an expert music producer AI. Give 5 professional production tips about "${topic}". Use real techniques and tool names. Format with emojis and bold titles.`
     );
-    await respond({ text: response });
+    await respond({ text: response || 'Could not generate tips. Try again!' });
     return;
   }
 
-  // GENERAL QUESTION
   await respond({ text: '🤔 Thinking...' });
-  const response = await askGemini(
-    `You are Musico, an expert AI assistant for music producers. Answer this question professionally and helpfully: "${input}"`
+  const response = await askAI(
+    `You are Musico, an expert AI assistant for music producers. Answer professionally: "${input}"`
   );
-  await respond({ text: response });
+  await respond({ text: response || 'Could not respond. Try again!' });
 });
 
-// ─── @MENTION HANDLER ─────────────────────────────────────
 app.event('app_mention', async ({ event, say }) => {
   const input = event.text.replace(/<@[^>]+>/g, '').trim();
   if (!input) {
     await say(`Hey <@${event.user}>! 🎛️ Ask me anything about music production!`);
     return;
   }
-  const response = await askGemini(
-    `You are Musico, an expert AI assistant for music producers. Answer this question professionally: "${input}"`
+  const response = await askAI(
+    `You are Musico, an expert AI assistant for music producers. Answer: "${input}"`
   );
-  await say(`<@${event.user}> ${response}`);
+  await say(`<@${event.user}> ${response || 'Could not respond. Try again!'}`);
 });
 
-// ─── DM HANDLER ───────────────────────────────────────────
 app.message(async ({ message, say }) => {
   if (message.subtype) return;
-  const response = await askGemini(
-    `You are Musico, an expert AI assistant for music producers. Answer this question professionally: "${message.text}"`
+  const response = await askAI(
+    `You are Musico, an expert AI for music producers. Answer: "${message.text}"`
   );
-  await say(response);
+  await say(response || 'Could not respond. Try again!');
 });
 
-// ─── START ────────────────────────────────────────────────
 (async () => {
   await app.start();
   console.log('🎛️ Musico is running!');
