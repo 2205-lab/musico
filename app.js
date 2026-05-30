@@ -2,6 +2,9 @@ require('dotenv').config();
 const { App } = require('@slack/bolt');
 const Groq = require('groq-sdk');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
@@ -12,6 +15,22 @@ const app = new App({
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+// ─── GROQ AI ─────────────────────────────────────────────
+async function askAI(prompt) {
+  try {
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1024,
+    });
+    return response.choices[0].message.content;
+  } catch (err) {
+    console.error('Groq error:', err.message);
+    return null;
+  }
+}
+
+// ─── SPOTIFY ─────────────────────────────────────────────
 async function getSpotifyToken() {
   const res = await axios.post(
     'https://accounts.spotify.com/api/token',
@@ -19,13 +38,9 @@ async function getSpotifyToken() {
     {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization:
-          'Basic ' +
-          Buffer.from(
-            process.env.SPOTIFY_CLIENT_ID +
-              ':' +
-              process.env.SPOTIFY_CLIENT_SECRET
-          ).toString('base64'),
+        Authorization: 'Basic ' + Buffer.from(
+          process.env.SPOTIFY_CLIENT_ID + ':' + process.env.SPOTIFY_CLIENT_SECRET
+        ).toString('base64'),
       },
     }
   );
@@ -63,27 +78,114 @@ async function getTrackFeatures(trackName) {
   }
 }
 
-async function askAI(prompt) {
+// ─── AUDIO ANALYSIS ──────────────────────────────────────
+async function analyzeAudioFile(fileUrl, filename) {
+  const tmpDir = '/tmp';
+  const filePath = path.join(tmpDir, filename);
+
   try {
-    const response = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 1024,
+    // Download file from Slack
+    const response = await axios.get(fileUrl, {
+      headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` },
+      responseType: 'arraybuffer',
     });
-    return response.choices[0].message.content;
+
+    fs.writeFileSync(filePath, response.data);
+
+    // Run Python Librosa analysis
+    const result = execSync(`python3 analyze.py "${filePath}"`).toString();
+    const analysis = JSON.parse(result);
+
+    // Clean up temp file
+    fs.unlinkSync(filePath);
+
+    return analysis;
   } catch (err) {
-    console.error('Groq error:', err.message);
+    console.error('Audio analysis error:', err.message);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     return null;
   }
 }
 
+// ─── FILE UPLOAD HANDLER ─────────────────────────────────
+app.event('file_shared', async ({ event, client }) => {
+  try {
+    const fileInfo = await client.files.info({ file: event.file_id });
+    const file = fileInfo.file;
+
+    const audioTypes = ['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg'];
+    const ext = file.name.split('.').pop().toLowerCase();
+
+    if (!audioTypes.includes(ext)) return;
+
+    await client.chat.postMessage({
+      channel: event.channel_id,
+      text: `🎵 *Analyzing "${file.name}"...*\nRunning BPM detection, key analysis, and frequency scan. This takes about 10 seconds...`,
+    });
+
+    const analysis = await analyzeAudioFile(file.url_private_download, file.name);
+
+    if (!analysis || analysis.error) {
+      await client.chat.postMessage({
+        channel: event.channel_id,
+        text: `❗ Could not analyze "${file.name}". Make sure it's a valid audio file (MP3, WAV, FLAC).`,
+      });
+      return;
+    }
+
+    // Get AI mixing feedback based on real analysis
+    const feedback = await askAI(
+      `You are Musico, a professional mixing engineer. A producer just uploaded a track with these real audio analysis results:
+      
+BPM: ${analysis.bpm}
+Key: ${analysis.key}
+Energy: ${analysis.energy}%
+Brightness: ${analysis.brightness}
+Bass ratio: ${analysis.bass_ratio}%
+Danceability: ${analysis.danceability}%
+Duration: ${analysis.duration} seconds
+
+Give them specific, professional mixing feedback based on these exact numbers. Include:
+- What the BPM and key suggest about the genre
+- Whether the energy level is appropriate
+- Specific EQ advice based on the brightness and bass ratio
+- Compression and dynamics suggestions
+- What to improve to make it more professional
+
+Be specific, use real numbers, and format with emojis and clear sections.`
+    );
+
+    await client.chat.postMessage({
+      channel: event.channel_id,
+      text: `🎛️ *Analysis Complete: ${file.name}*
+
+📊 *Audio Data:*
+- BPM: ${analysis.bpm}
+- Key: ${analysis.key}
+- Energy: ${analysis.energy}%
+- Brightness: ${analysis.brightness}
+- Bass presence: ${analysis.bass_ratio}%
+- Danceability: ${analysis.danceability}%
+- Duration: ${Math.floor(analysis.duration / 60)}:${String(analysis.duration % 60).padStart(2, '0')}
+
+🤖 *AI Mixing Feedback:*
+
+${feedback || 'Could not generate feedback. Try again!'}`,
+    });
+
+  } catch (err) {
+    console.error('File handler error:', err.message);
+  }
+});
+
+// ─── SLASH COMMANDS ───────────────────────────────────────
 app.command('/musico', async ({ command, ack, respond }) => {
   await ack();
   const input = command.text.trim();
 
   if (!input) {
     await respond({
-      text: `🎛️ *Welcome to Musico!*\n\nHere's what I can do:\n\n• \`/musico ideas [genre/mood]\` — Generate track ideas\n• \`/musico feedback [describe your mix]\` — Get mixing feedback\n• \`/musico reference [track name - artist]\` — Analyze a reference track\n• \`/musico bpm [mood or genre]\` — Get BPM, key & chord suggestions\n• \`/musico tips [topic]\` — Get production tips\n\nOr just \`@Musico\` and ask me anything! 🎵`,
+      text: `🎛️ *Welcome to Musico!*\n\nHere's what I can do:\n\n• \`/musico ideas [genre/mood]\` — Generate track ideas\n• \`/musico feedback [describe your mix]\` — Get mixing feedback\n• \`/musico reference [track - artist]\` — Analyze a reference track with real Spotify data\n• \`/musico bpm [mood or genre]\` — Get BPM, key & chord suggestions\n• \`/musico tips [topic]\` — Get production tips\n• \`/musico chords [key + genre]\` — Get chord progressions\n\n🎵 *Or upload any MP3/WAV file and I'll analyze it automatically!*\n\nOr just \`@Musico\` and ask me anything!`,
     });
     return;
   }
@@ -122,18 +224,16 @@ app.command('/musico', async ({ command, ack, respond }) => {
     }
     await respond({ text: `🔍 Looking up "${trackQuery}" on Spotify...` });
     const features = await getTrackFeatures(trackQuery);
-
     if (features) {
-      const spotifyInfo = `Track: ${features.name} by ${features.artist}\nBPM: ${features.bpm}\nKey: ${features.key}\nEnergy: ${features.energy}%\nDanceability: ${features.danceability}%\nLoudness: ${features.loudness} dB\nValence: ${features.valence}%`;
       const response = await askAI(
-        `You are Musico, a professional mixing engineer. Give advice on achieving the sound of this track based on its real Spotify data:\n\n${spotifyInfo}\n\nCover: tempo, key, energy, mixing targets, and overall vibe. Be specific and professional.`
+        `You are Musico, a professional mixing engineer. Give advice on achieving the sound of this track:\n\nTrack: ${features.name} by ${features.artist}\nBPM: ${features.bpm}\nKey: ${features.key}\nEnergy: ${features.energy}%\nDanceability: ${features.danceability}%\nLoudness: ${features.loudness} dB\nValence: ${features.valence}%\n\nCover: tempo, key, energy, mixing targets, and overall vibe.`
       );
       await respond({
-        text: `🎵 *${features.name} by ${features.artist}*\n\n📊 *Spotify Data:*\n• BPM: ${features.bpm}\n• Key: ${features.key}\n• Energy: ${features.energy}%\n• Danceability: ${features.danceability}%\n• Loudness: ${features.loudness} dB\n• Valence: ${features.valence}%\n\n🎛️ *How to achieve this sound:*\n\n${response || 'Could not generate advice. Try again!'}`,
+        text: `🎵 *${features.name} by ${features.artist}*\n\n📊 *Real Spotify Data:*\n• BPM: ${features.bpm}\n• Key: ${features.key}\n• Energy: ${features.energy}%\n• Danceability: ${features.danceability}%\n• Loudness: ${features.loudness} dB\n• Valence: ${features.valence}%\n\n🎛️ *How to achieve this sound:*\n\n${response || 'Could not generate advice. Try again!'}`,
       });
     } else {
       const response = await askAI(
-        `You are Musico, a professional mixing engineer. Give detailed advice on achieving the sound of "${trackQuery}". Cover tempo, key, mixing approach, and vibe.`
+        `You are Musico, a professional mixing engineer. Give detailed advice on achieving the sound of "${trackQuery}".`
       );
       await respond({ text: `🎛️ *Reference: ${trackQuery}*\n\n${response || 'Could not analyze. Try again!'}` });
     }
@@ -147,6 +247,16 @@ app.command('/musico', async ({ command, ack, respond }) => {
       `You are Musico, an expert music producer AI. For "${mood}", suggest: ideal BPM range, best keys, chord progressions, and typical song structure. Be specific with numbers.`
     );
     await respond({ text: response || 'Could not generate. Try again!' });
+    return;
+  }
+
+  if (lower.startsWith('chords')) {
+    const query = input.slice(6).trim() || 'C minor trap';
+    await respond({ text: '🎹 Generating chord progressions...' });
+    const response = await askAI(
+      `You are Musico, an expert music theory AI for producers. Generate 3 chord progressions for: "${query}". For each progression show: the chords, Roman numeral analysis, and the emotional feel. Also suggest a melody note that works over each chord.`
+    );
+    await respond({ text: response || 'Could not generate chords. Try again!' });
     return;
   }
 
@@ -167,10 +277,11 @@ app.command('/musico', async ({ command, ack, respond }) => {
   await respond({ text: response || 'Could not respond. Try again!' });
 });
 
+// ─── MENTIONS & DMs ───────────────────────────────────────
 app.event('app_mention', async ({ event, say }) => {
   const input = event.text.replace(/<@[^>]+>/g, '').trim();
   if (!input) {
-    await say(`Hey <@${event.user}>! 🎛️ Ask me anything about music production!`);
+    await say(`Hey <@${event.user}>! 🎛️ Ask me anything about music production! Or upload an MP3/WAV and I'll analyze it!`);
     return;
   }
   const response = await askAI(
@@ -187,6 +298,7 @@ app.message(async ({ message, say }) => {
   await say(response || 'Could not respond. Try again!');
 });
 
+// ─── START ────────────────────────────────────────────────
 (async () => {
   await app.start();
   console.log('🎛️ Musico is running!');
