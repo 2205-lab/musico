@@ -35,7 +35,6 @@ async function askAI(prompt) {
     text = text.replace(/\*\*([^*]+)\*\*/g, '*$1*');
     text = text.replace(/^-\s+/gm, '• ');
     text = text.replace(/^\d+\.\s+/gm, '• ');
-
     return text;
 
   } catch (err) {
@@ -228,7 +227,7 @@ function getWelcomeBlocks() {
     section('*🎵 Track Ideas*\n`/wavmind ideas [genre/mood]`\n_Example: `/wavmind ideas dark trap beat`_'),
     section('*🎚️ Mixing Feedback*\n`/wavmind feedback [describe your mix]`\n_Example: `/wavmind feedback my beat feels muddy at 140bpm`_'),
     section('*🔍 Reference Track Analysis*\n`/wavmind reference [track - artist]`\n_Pulls real Spotify data and gives you a sound blueprint_\n_Example: `/wavmind reference Blinding Lights - The Weeknd`_'),
-    section('*🎤 Artist Comparison*\n`/wavmind compare [artist1] [artist2]`\n_Compare production styles using real Spotify data_\n_Example: `/wavmind compare Drake Travis Scott`_'),
+    section('*🎤 Artist Comparison*\n`/wavmind compare [artist1] and [artist2]`\n_Compare production styles using real Spotify data_\n_Example: `/wavmind compare Drake and Travis Scott`_'),
     section('*🥁 BPM & Key Suggestions*\n`/wavmind bpm [mood or genre]`\n_Example: `/wavmind bpm dark cinematic hip hop`_'),
     section('*🎹 Chord Progressions*\n`/wavmind chords [key + genre]`\n_Example: `/wavmind chords F minor trap`_'),
     section('*💡 Production Tips*\n`/wavmind tips [topic]`\n_Example: `/wavmind tips 808 mixing`_'),
@@ -304,7 +303,7 @@ app.event('app_home_opened', async ({ event, client }) => {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: '*Try these commands in any channel:*\n\n`/wavmind ideas dark trap beat`\n`/wavmind reference Blinding Lights - The Weeknd`\n`/wavmind compare Drake Travis Scott`\n`/wavmind bpm dark cinematic hip hop`\n`/wavmind chords F minor trap`\n`/wavmind tips 808 mixing`\n`/wavmind feedback my beat feels muddy at 140bpm`',
+              text: '*Try these commands in any channel:*\n\n`/wavmind ideas dark trap beat`\n`/wavmind reference Blinding Lights - The Weeknd`\n`/wavmind compare Drake and Travis Scott`\n`/wavmind bpm dark cinematic hip hop`\n`/wavmind chords F minor trap`\n`/wavmind tips 808 mixing`\n`/wavmind feedback my beat feels muddy at 140bpm`',
             },
           },
           { type: 'divider' },
@@ -684,11 +683,11 @@ Write a final production report with: session overview, creative direction, tech
   // COMPARE
   if (lower.startsWith('compare')) {
     const artists = input.slice(7).trim();
-    if (!artists || !artists.includes(' ')) {
+    if (!artists || artists.split(' ').length < 2) {
       await respond({
         blocks: [
           header('❗ Need Two Artists'),
-          section('Please provide two artist names.\n\n*Example:*\n`/wavmind compare Drake Travis Scott`\n`/wavmind compare Kendrick Lamar J Cole`'),
+          section('Please provide two artist names.\n\n*Examples:*\n`/wavmind compare Drake and Travis Scott`\n`/wavmind compare Drake vs Travis Scott`\n`/wavmind compare Drake Travis Scott`'),
         ],
       });
       return;
@@ -702,10 +701,21 @@ Write a final production report with: session overview, creative direction, tech
       ],
     });
 
-    const words = artists.split(' ');
-    const mid = Math.ceil(words.length / 2);
-    const artist1 = words.slice(0, mid).join(' ');
-    const artist2 = words.slice(mid).join(' ');
+    let artist1, artist2;
+    if (artists.toLowerCase().includes(' and ')) {
+      const parts = artists.split(/\s+and\s+/i);
+      artist1 = parts[0].trim();
+      artist2 = parts[1].trim();
+    } else if (artists.toLowerCase().includes(' vs ')) {
+      const parts = artists.split(/\s+vs\s+/i);
+      artist1 = parts[0].trim();
+      artist2 = parts[1].trim();
+    } else {
+      const words = artists.split(' ');
+      const mid = Math.ceil(words.length / 2);
+      artist1 = words.slice(0, mid).join(' ');
+      artist2 = words.slice(mid).join(' ');
+    }
 
     const [stats1, stats2] = await Promise.all([
       getArtistStats(artist1),
@@ -716,7 +726,7 @@ Write a final production report with: session overview, creative direction, tech
       await respond({
         blocks: [
           header('❗ Artist Not Found'),
-          section(`Could not find one or both artists on Spotify.\n\nTry being more specific:\n\`/wavmind compare Drake Travis Scott\``),
+          section(`Could not find one or both artists on Spotify.\n\nTry:\n\`/wavmind compare Drake and Travis Scott\``),
         ],
       });
       return;
