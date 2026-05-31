@@ -43,6 +43,26 @@ async function askAI(prompt) {
   }
 }
 
+// ─── NEWSDATA TRENDING ───────────────────────────────────
+async function getTrendingMusic(topic = 'music production') {
+  try {
+    const query = encodeURIComponent(topic + ' music');
+    const url = `https://newsdata.io/api/1/news?apikey=${process.env.NEWSDATA_API_KEY}&q=${query}&language=en&category=entertainment`;
+    const res = await axios.get(url, { timeout: 10000 });
+    const articles = res.data.results?.slice(0, 5) || [];
+    if (!articles.length) return null;
+    return articles.map(a => ({
+      title: a.title,
+      source: a.source_id,
+      date: a.pubDate?.split(' ')[0] || 'recent',
+      description: a.description?.slice(0, 150) || '',
+    }));
+  } catch (err) {
+    console.error('NewsData error:', err.message);
+    return null;
+  }
+}
+
 // ─── SPOTIFY ─────────────────────────────────────────────
 async function getSpotifyToken() {
   const res = await axios.post(
@@ -228,6 +248,7 @@ function getWelcomeBlocks() {
     section('*🎚️ Mixing Feedback*\n`/wavmind feedback [describe your mix]`\n_Example: `/wavmind feedback my beat feels muddy at 140bpm`_'),
     section('*🔍 Reference Track Analysis*\n`/wavmind reference [track - artist]`\n_Pulls real Spotify data and gives you a sound blueprint_\n_Example: `/wavmind reference Blinding Lights - The Weeknd`_'),
     section('*🎤 Artist Comparison*\n`/wavmind compare [artist1] and [artist2]`\n_Compare production styles using real Spotify data_\n_Example: `/wavmind compare Drake and Travis Scott`_'),
+    section('*📰 Trending News*\n`/wavmind trending [topic]`\n_Real-time music industry news and AI insights_\n_Example: `/wavmind trending trap beats`_'),
     section('*🥁 BPM & Key Suggestions*\n`/wavmind bpm [mood or genre]`\n_Example: `/wavmind bpm dark cinematic hip hop`_'),
     section('*🎹 Chord Progressions*\n`/wavmind chords [key + genre]`\n_Example: `/wavmind chords F minor trap`_'),
     section('*💡 Production Tips*\n`/wavmind tips [topic]`\n_Example: `/wavmind tips 808 mixing`_'),
@@ -276,22 +297,22 @@ app.event('app_home_opened', async ({ event, client }) => {
           {
             type: 'section',
             fields: [
+              { type: 'mrkdwn', text: '📰 *Trending News*\nReal-time music industry news with AI insights' },
               { type: 'mrkdwn', text: '🎹 *Chord Progressions*\nMusic theory-based chord ideas for any key and genre' },
+            ],
+          },
+          {
+            type: 'section',
+            fields: [
               { type: 'mrkdwn', text: '🥁 *BPM & Key*\nIdeal tempo and key suggestions for any mood' },
-            ],
-          },
-          {
-            type: 'section',
-            fields: [
               { type: 'mrkdwn', text: '💡 *Production Tips*\nExpert tips on any music production topic' },
-              { type: 'mrkdwn', text: '🎛️ *Audio Analysis*\nUpload MP3/WAV — Wavmind scans energy, brightness and bass' },
             ],
           },
           {
             type: 'section',
             fields: [
+              { type: 'mrkdwn', text: '🎛️ *Audio Analysis*\nUpload MP3/WAV — Wavmind scans energy, brightness and bass' },
               { type: 'mrkdwn', text: '🤝 *Collab Mode*\nTrack ideas, feedback and decisions with your team' },
-              { type: 'mrkdwn', text: '🤖 *AI Chat*\n@mention Wavmind anywhere and ask anything' },
             ],
           },
           { type: 'divider' },
@@ -303,7 +324,7 @@ app.event('app_home_opened', async ({ event, client }) => {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: '*Try these commands in any channel:*\n\n`/wavmind ideas dark trap beat`\n`/wavmind reference Blinding Lights - The Weeknd`\n`/wavmind compare Drake and Travis Scott`\n`/wavmind bpm dark cinematic hip hop`\n`/wavmind chords F minor trap`\n`/wavmind tips 808 mixing`\n`/wavmind feedback my beat feels muddy at 140bpm`',
+              text: '*Try these commands in any channel:*\n\n`/wavmind ideas dark trap beat`\n`/wavmind reference Blinding Lights - The Weeknd`\n`/wavmind compare Drake and Travis Scott`\n`/wavmind trending trap beats`\n`/wavmind bpm dark cinematic hip hop`\n`/wavmind chords F minor trap`\n`/wavmind tips 808 mixing`\n`/wavmind feedback my beat feels muddy at 140bpm`',
             },
           },
           { type: 'divider' },
@@ -351,7 +372,14 @@ app.event('app_home_opened', async ({ event, client }) => {
           {
             type: 'section',
             fields: [
+              { type: 'mrkdwn', text: '📰 *News Data*\nNewsData.io Real-Time API' },
               { type: 'mrkdwn', text: '🎧 *Audio Analysis*\nLibrosa Python' },
+            ],
+          },
+          {
+            type: 'section',
+            fields: [
+              { type: 'mrkdwn', text: '🤝 *Collab Mode*\nTeam session tracking' },
               { type: 'mrkdwn', text: '⚡ *Response Time*\nUnder 3 seconds' },
             ],
           },
@@ -680,6 +708,63 @@ Write a final production report with: session overview, creative direction, tech
     return;
   }
 
+  // TRENDING
+  if (lower.startsWith('trending')) {
+    const topic = input.slice(8).trim() || 'music production';
+    await respond({
+      blocks: [
+        header('📰 Fetching Latest Trends...'),
+        section(`Searching real-time news for *${topic}*`),
+        context('⏳ Scanning current music industry news...'),
+      ],
+    });
+
+    const articles = await getTrendingMusic(topic);
+
+    if (!articles || articles.length === 0) {
+      await respond({
+        blocks: [
+          header('❗ No Results Found'),
+          section(`Could not find trending news for *${topic}*.\n\nTry:\n\`/wavmind trending trap\`\n\`/wavmind trending plugins\`\n\`/wavmind trending hip hop\``),
+        ],
+      });
+      return;
+    }
+
+    const newsText = articles
+      .map((a, i) => `${i + 1}. *${a.title}*\n_${a.source} · ${a.date}_${a.description ? '\n' + a.description : ''}`)
+      .join('\n\n');
+
+    const aiSummary = await askAI(
+      `You are Wavmind, an expert AI assistant for music producers. Based on these real current news articles about "${topic}":
+${articles.map(a => `- ${a.title}: ${a.description}`).join('\n')}
+
+Give producers:
+- What this means for music production right now
+- Key trends they should know about
+- How to use these trends in their own music
+- Any new tools or techniques mentioned
+
+Be specific and actionable. Format with emojis and clear sections.`
+    );
+
+    await respond({
+      blocks: [
+        header('📰 Trending in Music'),
+        section(`*Topic:* ${topic}`),
+        divider(),
+        section('🔴 *Latest News (Real-Time)*'),
+        section(newsText),
+        divider(),
+        section('🎛️ *What This Means for Producers:*'),
+        section(aiSummary || 'Could not generate insights. Try again!'),
+        divider(),
+        context('💡 Try: `/wavmind trending trap` · `/wavmind trending plugins` · `/wavmind trending hip hop`'),
+      ],
+    });
+    return;
+  }
+
   // COMPARE
   if (lower.startsWith('compare')) {
     const artists = input.slice(7).trim();
@@ -734,17 +819,13 @@ Write a final production report with: session overview, creative direction, tech
 
     const aiComparison = await askAI(
       `You are Wavmind, a professional music producer AI. Compare the production styles of these two artists based on their real Spotify audio data:
-
 ${stats1.name}: BPM ${stats1.bpm}, Energy ${stats1.energy}%, Danceability ${stats1.danceability}%, Valence ${stats1.valence}%, Loudness ${stats1.loudness}dB, Common Key ${stats1.key}
-
 ${stats2.name}: BPM ${stats2.bpm}, Energy ${stats2.energy}%, Danceability ${stats2.danceability}%, Valence ${stats2.valence}%, Loudness ${stats2.loudness}dB, Common Key ${stats2.key}
-
 Give producers:
 - Key differences in production style
 - What makes each artist's sound unique
 - How to blend both styles
 - Which genres each style suits best
-
 Format with clear sections and emojis. Be specific and professional.`
     );
 
@@ -754,60 +835,18 @@ Format with clear sections and emojis. Be specific and professional.`
         section(`*${stats1.name}* vs *${stats2.name}*`),
         divider(),
         section('📊 *Real Spotify Data*'),
-        {
-          type: 'section',
-          fields: [
-            { type: 'mrkdwn', text: `*${stats1.name}*` },
-            { type: 'mrkdwn', text: `*${stats2.name}*` },
-          ],
-        },
-        {
-          type: 'section',
-          fields: [
-            { type: 'mrkdwn', text: `🥁 *BPM*\n${stats1.bpm}` },
-            { type: 'mrkdwn', text: `🥁 *BPM*\n${stats2.bpm}` },
-          ],
-        },
-        {
-          type: 'section',
-          fields: [
-            { type: 'mrkdwn', text: `⚡ *Energy*\n${stats1.energy}%` },
-            { type: 'mrkdwn', text: `⚡ *Energy*\n${stats2.energy}%` },
-          ],
-        },
-        {
-          type: 'section',
-          fields: [
-            { type: 'mrkdwn', text: `💃 *Danceability*\n${stats1.danceability}%` },
-            { type: 'mrkdwn', text: `💃 *Danceability*\n${stats2.danceability}%` },
-          ],
-        },
-        {
-          type: 'section',
-          fields: [
-            { type: 'mrkdwn', text: `😊 *Valence*\n${stats1.valence}%` },
-            { type: 'mrkdwn', text: `😊 *Valence*\n${stats2.valence}%` },
-          ],
-        },
-        {
-          type: 'section',
-          fields: [
-            { type: 'mrkdwn', text: `🔊 *Loudness*\n${stats1.loudness} dB` },
-            { type: 'mrkdwn', text: `🔊 *Loudness*\n${stats2.loudness} dB` },
-          ],
-        },
-        {
-          type: 'section',
-          fields: [
-            { type: 'mrkdwn', text: `🎵 *Common Key*\n${stats1.key}` },
-            { type: 'mrkdwn', text: `🎵 *Common Key*\n${stats2.key}` },
-          ],
-        },
+        { type: 'section', fields: [{ type: 'mrkdwn', text: `*${stats1.name}*` }, { type: 'mrkdwn', text: `*${stats2.name}*` }] },
+        { type: 'section', fields: [{ type: 'mrkdwn', text: `🥁 *BPM*\n${stats1.bpm}` }, { type: 'mrkdwn', text: `🥁 *BPM*\n${stats2.bpm}` }] },
+        { type: 'section', fields: [{ type: 'mrkdwn', text: `⚡ *Energy*\n${stats1.energy}%` }, { type: 'mrkdwn', text: `⚡ *Energy*\n${stats2.energy}%` }] },
+        { type: 'section', fields: [{ type: 'mrkdwn', text: `💃 *Danceability*\n${stats1.danceability}%` }, { type: 'mrkdwn', text: `💃 *Danceability*\n${stats2.danceability}%` }] },
+        { type: 'section', fields: [{ type: 'mrkdwn', text: `😊 *Valence*\n${stats1.valence}%` }, { type: 'mrkdwn', text: `😊 *Valence*\n${stats2.valence}%` }] },
+        { type: 'section', fields: [{ type: 'mrkdwn', text: `🔊 *Loudness*\n${stats1.loudness} dB` }, { type: 'mrkdwn', text: `🔊 *Loudness*\n${stats2.loudness} dB` }] },
+        { type: 'section', fields: [{ type: 'mrkdwn', text: `🎵 *Common Key*\n${stats1.key}` }, { type: 'mrkdwn', text: `🎵 *Common Key*\n${stats2.key}` }] },
         divider(),
         section('🎛️ *Production Style Analysis:*'),
         section(aiComparison || 'Could not generate comparison. Try again!'),
         divider(),
-        context(`💡 Use \`/wavmind reference [track name]\` to analyze a specific song from either artist`),
+        context('💡 Use `/wavmind reference [track name]` to analyze a specific song from either artist'),
       ],
     });
     return;
