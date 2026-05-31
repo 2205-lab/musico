@@ -31,8 +31,6 @@ async function askAI(prompt) {
     });
 
     let text = response.choices[0].message.content;
-
-    // Clean markdown that Slack does not render
     text = text.replace(/#{1,6}\s+/g, '*');
     text = text.replace(/\*\*([^*]+)\*\*/g, '*$1*');
     text = text.replace(/^-\s+/gm, '• ');
@@ -90,6 +88,49 @@ async function getTrackFeatures(trackName) {
     };
   } catch (err) {
     console.error('Spotify error:', err.message);
+    return null;
+  }
+}
+
+async function getArtistStats(artistName) {
+  try {
+    const token = await getSpotifyToken();
+    const search = await axios.get('https://api.spotify.com/v1/search', {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { q: artistName, type: 'track', limit: 5 },
+    });
+    const tracks = search.data.tracks.items;
+    if (!tracks.length) return null;
+
+    const featurePromises = tracks.map(t =>
+      axios.get(`https://api.spotify.com/v1/audio-features/${t.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+    );
+    const featuresRes = await Promise.all(featurePromises);
+    const features = featuresRes.map(r => r.data);
+
+    const avg = (key) => Math.round(
+      features.reduce((sum, f) => sum + f[key], 0) / features.length
+    );
+    const avgFloat = (key) => (
+      features.reduce((sum, f) => sum + f[key], 0) / features.length
+    ).toFixed(1);
+
+    const keys = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+    const modes = ['Minor','Major'];
+
+    return {
+      name: artistName,
+      bpm: avg('tempo'),
+      energy: Math.round(avg('energy')),
+      danceability: Math.round(avg('danceability')),
+      valence: Math.round(avg('valence')),
+      loudness: avgFloat('loudness'),
+      key: keys[Math.abs(avg('key')) % 12] + ' ' + modes[avg('mode') > 0 ? 1 : 0],
+    };
+  } catch (err) {
+    console.error('Artist stats error:', err.message);
     return null;
   }
 }
@@ -187,6 +228,7 @@ function getWelcomeBlocks() {
     section('*🎵 Track Ideas*\n`/wavmind ideas [genre/mood]`\n_Example: `/wavmind ideas dark trap beat`_'),
     section('*🎚️ Mixing Feedback*\n`/wavmind feedback [describe your mix]`\n_Example: `/wavmind feedback my beat feels muddy at 140bpm`_'),
     section('*🔍 Reference Track Analysis*\n`/wavmind reference [track - artist]`\n_Pulls real Spotify data and gives you a sound blueprint_\n_Example: `/wavmind reference Blinding Lights - The Weeknd`_'),
+    section('*🎤 Artist Comparison*\n`/wavmind compare [artist1] [artist2]`\n_Compare production styles using real Spotify data_\n_Example: `/wavmind compare Drake Travis Scott`_'),
     section('*🥁 BPM & Key Suggestions*\n`/wavmind bpm [mood or genre]`\n_Example: `/wavmind bpm dark cinematic hip hop`_'),
     section('*🎹 Chord Progressions*\n`/wavmind chords [key + genre]`\n_Example: `/wavmind chords F minor trap`_'),
     section('*💡 Production Tips*\n`/wavmind tips [topic]`\n_Example: `/wavmind tips 808 mixing`_'),
@@ -229,21 +271,28 @@ app.event('app_home_opened', async ({ event, client }) => {
             type: 'section',
             fields: [
               { type: 'mrkdwn', text: '🔍 *Reference Tracks*\nPull real Spotify data from any song and get a sound blueprint' },
+              { type: 'mrkdwn', text: '🎤 *Artist Comparison*\nCompare two artists production styles using real Spotify data' },
+            ],
+          },
+          {
+            type: 'section',
+            fields: [
               { type: 'mrkdwn', text: '🎹 *Chord Progressions*\nMusic theory-based chord ideas for any key and genre' },
-            ],
-          },
-          {
-            type: 'section',
-            fields: [
               { type: 'mrkdwn', text: '🥁 *BPM & Key*\nIdeal tempo and key suggestions for any mood' },
-              { type: 'mrkdwn', text: '💡 *Production Tips*\nExpert tips on any music production topic' },
             ],
           },
           {
             type: 'section',
             fields: [
+              { type: 'mrkdwn', text: '💡 *Production Tips*\nExpert tips on any music production topic' },
               { type: 'mrkdwn', text: '🎛️ *Audio Analysis*\nUpload MP3/WAV — Wavmind scans energy, brightness and bass' },
+            ],
+          },
+          {
+            type: 'section',
+            fields: [
               { type: 'mrkdwn', text: '🤝 *Collab Mode*\nTrack ideas, feedback and decisions with your team' },
+              { type: 'mrkdwn', text: '🤖 *AI Chat*\n@mention Wavmind anywhere and ask anything' },
             ],
           },
           { type: 'divider' },
@@ -255,7 +304,7 @@ app.event('app_home_opened', async ({ event, client }) => {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: '*Try these commands in any channel:*\n\n`/wavmind ideas dark trap beat`\n`/wavmind reference Blinding Lights - The Weeknd`\n`/wavmind bpm dark cinematic hip hop`\n`/wavmind chords F minor trap`\n`/wavmind tips 808 mixing`\n`/wavmind feedback my beat feels muddy at 140bpm`',
+              text: '*Try these commands in any channel:*\n\n`/wavmind ideas dark trap beat`\n`/wavmind reference Blinding Lights - The Weeknd`\n`/wavmind compare Drake Travis Scott`\n`/wavmind bpm dark cinematic hip hop`\n`/wavmind chords F minor trap`\n`/wavmind tips 808 mixing`\n`/wavmind feedback my beat feels muddy at 140bpm`',
             },
           },
           { type: 'divider' },
@@ -413,11 +462,9 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
     const subInput = input.slice(6).trim();
     const subLower = subInput.toLowerCase();
 
-    // START
     if (subLower.startsWith('start')) {
       const trackName = subInput.slice(5).trim().replace(/['"]/g, '') || 'Untitled Track';
       const existing = getCollabSession(command.channel_id);
-
       if (existing) {
         await respond({
           blocks: [
@@ -427,9 +474,7 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
         });
         return;
       }
-
       startCollabSession(command.channel_id, trackName, command.user_id);
-
       await respond({
         response_type: 'in_channel',
         blocks: [
@@ -452,37 +497,18 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
       return;
     }
 
-    // IDEA
     if (subLower.startsWith('idea')) {
       const idea = subInput.slice(4).trim();
       const session = getCollabSession(command.channel_id);
-
       if (!session) {
-        await respond({
-          blocks: [
-            header('❗ No Active Session'),
-            section('Start a collab session first:\n`/wavmind collab start "Track Name"`'),
-          ],
-        });
+        await respond({ blocks: [header('❗ No Active Session'), section('Start a collab session first:\n`/wavmind collab start "Track Name"`')] });
         return;
       }
-
       if (!idea) {
-        await respond({
-          blocks: [
-            header('❗ Missing Idea'),
-            section('*Example:*\n`/wavmind collab idea use sidechain compression on the 808`'),
-          ],
-        });
+        await respond({ blocks: [header('❗ Missing Idea'), section('*Example:*\n`/wavmind collab idea use sidechain compression on the 808`')] });
         return;
       }
-
-      session.ideas.push({
-        text: idea,
-        user: command.user_id,
-        time: new Date().toISOString(),
-      });
-
+      session.ideas.push({ text: idea, user: command.user_id, time: new Date().toISOString() });
       await respond({
         response_type: 'in_channel',
         blocks: [
@@ -494,37 +520,18 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
       return;
     }
 
-    // FEEDBACK
     if (subLower.startsWith('feedback')) {
       const feedbackText = subInput.slice(8).trim();
       const session = getCollabSession(command.channel_id);
-
       if (!session) {
-        await respond({
-          blocks: [
-            header('❗ No Active Session'),
-            section('Start a collab session first:\n`/wavmind collab start "Track Name"`'),
-          ],
-        });
+        await respond({ blocks: [header('❗ No Active Session'), section('Start a collab session first:\n`/wavmind collab start "Track Name"`')] });
         return;
       }
-
       if (!feedbackText) {
-        await respond({
-          blocks: [
-            header('❗ Missing Feedback'),
-            section('*Example:*\n`/wavmind collab feedback the drop feels weak`'),
-          ],
-        });
+        await respond({ blocks: [header('❗ Missing Feedback'), section('*Example:*\n`/wavmind collab feedback the drop feels weak`')] });
         return;
       }
-
-      session.feedback.push({
-        text: feedbackText,
-        user: command.user_id,
-        time: new Date().toISOString(),
-      });
-
+      session.feedback.push({ text: feedbackText, user: command.user_id, time: new Date().toISOString() });
       await respond({
         response_type: 'in_channel',
         blocks: [
@@ -536,37 +543,18 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
       return;
     }
 
-    // DECISION
     if (subLower.startsWith('decision')) {
       const decision = subInput.slice(8).trim();
       const session = getCollabSession(command.channel_id);
-
       if (!session) {
-        await respond({
-          blocks: [
-            header('❗ No Active Session'),
-            section('Start a collab session first:\n`/wavmind collab start "Track Name"`'),
-          ],
-        });
+        await respond({ blocks: [header('❗ No Active Session'), section('Start a collab session first:\n`/wavmind collab start "Track Name"`')] });
         return;
       }
-
       if (!decision) {
-        await respond({
-          blocks: [
-            header('❗ Missing Decision'),
-            section('*Example:*\n`/wavmind collab decision going with F minor key`'),
-          ],
-        });
+        await respond({ blocks: [header('❗ Missing Decision'), section('*Example:*\n`/wavmind collab decision going with F minor key`')] });
         return;
       }
-
-      session.decisions.push({
-        text: decision,
-        user: command.user_id,
-        time: new Date().toISOString(),
-      });
-
+      session.decisions.push({ text: decision, user: command.user_id, time: new Date().toISOString() });
       await respond({
         response_type: 'in_channel',
         blocks: [
@@ -578,33 +566,19 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
       return;
     }
 
-    // STATUS
     if (subLower.startsWith('status')) {
       const session = getCollabSession(command.channel_id);
-
       if (!session) {
-        await respond({
-          blocks: [
-            header('❗ No Active Session'),
-            section('Start a collab session first:\n`/wavmind collab start "Track Name"`'),
-          ],
-        });
+        await respond({ blocks: [header('❗ No Active Session'), section('Start a collab session first:\n`/wavmind collab start "Track Name"`')] });
         return;
       }
-
       await respond({
         blocks: [
           header('📊 Session Status'),
           section(`*Track:* "${session.trackName}"\n*Started by:* <@${session.startedBy}>`),
           divider(),
-          twoCol(
-            `💡 *Ideas*\n${session.ideas.length} logged`,
-            `🎚️ *Feedback*\n${session.feedback.length} logged`
-          ),
-          twoCol(
-            `✅ *Decisions*\n${session.decisions.length} logged`,
-            `⏱️ *Started*\n${new Date(session.startedAt).toLocaleTimeString()}`
-          ),
+          twoCol(`💡 *Ideas*\n${session.ideas.length} logged`, `🎚️ *Feedback*\n${session.feedback.length} logged`),
+          twoCol(`✅ *Decisions*\n${session.decisions.length} logged`, `⏱️ *Started*\n${new Date(session.startedAt).toLocaleTimeString()}`),
           divider(),
           context('Use `/wavmind collab summary` for full AI summary · `/wavmind collab end` to finish'),
         ],
@@ -612,20 +586,12 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
       return;
     }
 
-    // SUMMARY
     if (subLower.startsWith('summary')) {
       const session = getCollabSession(command.channel_id);
-
       if (!session) {
-        await respond({
-          blocks: [
-            header('❗ No Active Session'),
-            section('Start a collab session first:\n`/wavmind collab start "Track Name"`'),
-          ],
-        });
+        await respond({ blocks: [header('❗ No Active Session'), section('Start a collab session first:\n`/wavmind collab start "Track Name"`')] });
         return;
       }
-
       await respond({
         blocks: [
           header('📋 Generating Session Summary...'),
@@ -633,78 +599,39 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
           context('⏳ AI is reviewing your session...'),
         ],
       });
-
-      const ideasText = session.ideas.length > 0
-        ? session.ideas.map((i, n) => `${n + 1}. ${i.text}`).join('\n')
-        : 'None logged';
-
-      const feedbackText = session.feedback.length > 0
-        ? session.feedback.map((f, n) => `${n + 1}. ${f.text}`).join('\n')
-        : 'None logged';
-
-      const decisionsText = session.decisions.length > 0
-        ? session.decisions.map((d, n) => `${n + 1}. ${d.text}`).join('\n')
-        : 'None logged';
-
+      const ideasText = session.ideas.length > 0 ? session.ideas.map((i, n) => `${n + 1}. ${i.text}`).join('\n') : 'None logged';
+      const feedbackText = session.feedback.length > 0 ? session.feedback.map((f, n) => `${n + 1}. ${f.text}`).join('\n') : 'None logged';
+      const decisionsText = session.decisions.length > 0 ? session.decisions.map((d, n) => `${n + 1}. ${d.text}`).join('\n') : 'None logged';
       const summary = await askAI(
         `You are Wavmind, an AI assistant for music producers. Summarize this collab session for the track "${session.trackName}":
-
-IDEAS LOGGED:
-${ideasText}
-
-FEEDBACK LOGGED:
-${feedbackText}
-
-DECISIONS MADE:
-${decisionsText}
-
-Give a professional summary including:
-- Overview of the session
-- Key creative directions identified
-- Main issues to address
-- Final decisions made
-- Recommended next steps for completing this track
-
-Format with clear sections and emojis. Be specific and actionable.`
+IDEAS: ${ideasText}
+FEEDBACK: ${feedbackText}
+DECISIONS: ${decisionsText}
+Give a professional summary including: session overview, key creative directions, main issues to address, final decisions made, recommended next steps. Format with clear sections and emojis.`
       );
-
       await respond({
         response_type: 'in_channel',
         blocks: [
           header('📋 Session Summary'),
           section(`*Track:* "${session.trackName}"`),
           divider(),
-          twoCol(
-            `💡 *Ideas logged*\n${session.ideas.length}`,
-            `🎚️ *Feedback logged*\n${session.feedback.length}`
-          ),
-          twoCol(
-            `✅ *Decisions made*\n${session.decisions.length}`,
-            `⏱️ *Session duration*\nSince ${new Date(session.startedAt).toLocaleTimeString()}`
-          ),
+          twoCol(`💡 *Ideas logged*\n${session.ideas.length}`, `🎚️ *Feedback logged*\n${session.feedback.length}`),
+          twoCol(`✅ *Decisions made*\n${session.decisions.length}`, `⏱️ *Started*\n${new Date(session.startedAt).toLocaleTimeString()}`),
           divider(),
           section(summary || 'Could not generate summary. Try again!'),
           divider(),
-          context('Use `/wavmind collab end` to end the session · `/wavmind collab status` to check progress'),
+          context('Use `/wavmind collab end` to end · `/wavmind collab status` to check progress'),
         ],
       });
       return;
     }
 
-    // END
     if (subLower.startsWith('end')) {
       const session = getCollabSession(command.channel_id);
-
       if (!session) {
-        await respond({
-          blocks: [
-            header('❗ No Active Session'),
-            section('There is no active collab session in this channel.'),
-          ],
-        });
+        await respond({ blocks: [header('❗ No Active Session'), section('There is no active collab session in this channel.')] });
         return;
       }
-
       await respond({
         blocks: [
           header('📋 Generating Final Summary...'),
@@ -712,58 +639,25 @@ Format with clear sections and emojis. Be specific and actionable.`
           context('⏳ Creating final report...'),
         ],
       });
-
-      const ideasText = session.ideas.length > 0
-        ? session.ideas.map((i, n) => `${n + 1}. ${i.text}`).join('\n')
-        : 'None logged';
-
-      const feedbackText = session.feedback.length > 0
-        ? session.feedback.map((f, n) => `${n + 1}. ${f.text}`).join('\n')
-        : 'None logged';
-
-      const decisionsText = session.decisions.length > 0
-        ? session.decisions.map((d, n) => `${n + 1}. ${d.text}`).join('\n')
-        : 'None logged';
-
+      const ideasText = session.ideas.length > 0 ? session.ideas.map((i, n) => `${n + 1}. ${i.text}`).join('\n') : 'None logged';
+      const feedbackText = session.feedback.length > 0 ? session.feedback.map((f, n) => `${n + 1}. ${f.text}`).join('\n') : 'None logged';
+      const decisionsText = session.decisions.length > 0 ? session.decisions.map((d, n) => `${n + 1}. ${d.text}`).join('\n') : 'None logged';
       const finalSummary = await askAI(
         `You are Wavmind, an AI assistant for music producers. Create a final session report for the track "${session.trackName}":
-
-IDEAS:
-${ideasText}
-
-FEEDBACK:
-${feedbackText}
-
-DECISIONS:
-${decisionsText}
-
-Write a final production report with:
-- Session overview
-- Creative direction established
-- Technical decisions made
-- Problems identified and solutions
-- Clear action items for next session
-- Encouraging closing note for the team
-
-Format professionally with emojis and clear sections.`
+IDEAS: ${ideasText}
+FEEDBACK: ${feedbackText}
+DECISIONS: ${decisionsText}
+Write a final production report with: session overview, creative direction, technical decisions, problems and solutions, action items for next session, encouraging closing note. Format professionally with emojis.`
       );
-
       endCollabSession(command.channel_id);
-
       await respond({
         response_type: 'in_channel',
         blocks: [
           header('🏁 Collab Session Complete'),
           section(`*Track:* "${session.trackName}"\n*Started by:* <@${session.startedBy}>`),
           divider(),
-          twoCol(
-            `💡 *Total ideas*\n${session.ideas.length}`,
-            `🎚️ *Total feedback*\n${session.feedback.length}`
-          ),
-          twoCol(
-            `✅ *Total decisions*\n${session.decisions.length}`,
-            `⏱️ *Session started*\n${new Date(session.startedAt).toLocaleTimeString()}`
-          ),
+          twoCol(`💡 *Total ideas*\n${session.ideas.length}`, `🎚️ *Total feedback*\n${session.feedback.length}`),
+          twoCol(`✅ *Total decisions*\n${session.decisions.length}`, `⏱️ *Started*\n${new Date(session.startedAt).toLocaleTimeString()}`),
           divider(),
           section('📋 *Final Session Report:*'),
           section(finalSummary || 'Could not generate report. Try again!'),
@@ -774,7 +668,6 @@ Format professionally with emojis and clear sections.`
       return;
     }
 
-    // COLLAB HELP
     await respond({
       blocks: [
         header('🤝 Collab Mode'),
@@ -783,6 +676,128 @@ Format professionally with emojis and clear sections.`
         section('`/wavmind collab start "Track Name"` — Start a new session\n`/wavmind collab idea [idea]` — Log a production idea\n`/wavmind collab feedback [feedback]` — Log mix feedback\n`/wavmind collab decision [decision]` — Log a final decision\n`/wavmind collab status` — Check session progress\n`/wavmind collab summary` — Get full AI summary\n`/wavmind collab end` — End and archive the session'),
         divider(),
         context('💡 Collab mode tracks everything your team discusses so nothing gets lost'),
+      ],
+    });
+    return;
+  }
+
+  // COMPARE
+  if (lower.startsWith('compare')) {
+    const artists = input.slice(7).trim();
+    if (!artists || !artists.includes(' ')) {
+      await respond({
+        blocks: [
+          header('❗ Need Two Artists'),
+          section('Please provide two artist names.\n\n*Example:*\n`/wavmind compare Drake Travis Scott`\n`/wavmind compare Kendrick Lamar J Cole`'),
+        ],
+      });
+      return;
+    }
+
+    await respond({
+      blocks: [
+        header('🔍 Comparing Artists...'),
+        section(`Looking up *${artists}* on Spotify`),
+        context('⏳ Fetching real audio data for both artists...'),
+      ],
+    });
+
+    const words = artists.split(' ');
+    const mid = Math.ceil(words.length / 2);
+    const artist1 = words.slice(0, mid).join(' ');
+    const artist2 = words.slice(mid).join(' ');
+
+    const [stats1, stats2] = await Promise.all([
+      getArtistStats(artist1),
+      getArtistStats(artist2),
+    ]);
+
+    if (!stats1 || !stats2) {
+      await respond({
+        blocks: [
+          header('❗ Artist Not Found'),
+          section(`Could not find one or both artists on Spotify.\n\nTry being more specific:\n\`/wavmind compare Drake Travis Scott\``),
+        ],
+      });
+      return;
+    }
+
+    const aiComparison = await askAI(
+      `You are Wavmind, a professional music producer AI. Compare the production styles of these two artists based on their real Spotify audio data:
+
+${stats1.name}: BPM ${stats1.bpm}, Energy ${stats1.energy}%, Danceability ${stats1.danceability}%, Valence ${stats1.valence}%, Loudness ${stats1.loudness}dB, Common Key ${stats1.key}
+
+${stats2.name}: BPM ${stats2.bpm}, Energy ${stats2.energy}%, Danceability ${stats2.danceability}%, Valence ${stats2.valence}%, Loudness ${stats2.loudness}dB, Common Key ${stats2.key}
+
+Give producers:
+- Key differences in production style
+- What makes each artist's sound unique
+- How to blend both styles
+- Which genres each style suits best
+
+Format with clear sections and emojis. Be specific and professional.`
+    );
+
+    await respond({
+      blocks: [
+        header('🎤 Artist Comparison'),
+        section(`*${stats1.name}* vs *${stats2.name}*`),
+        divider(),
+        section('📊 *Real Spotify Data*'),
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `*${stats1.name}*` },
+            { type: 'mrkdwn', text: `*${stats2.name}*` },
+          ],
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `🥁 *BPM*\n${stats1.bpm}` },
+            { type: 'mrkdwn', text: `🥁 *BPM*\n${stats2.bpm}` },
+          ],
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `⚡ *Energy*\n${stats1.energy}%` },
+            { type: 'mrkdwn', text: `⚡ *Energy*\n${stats2.energy}%` },
+          ],
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `💃 *Danceability*\n${stats1.danceability}%` },
+            { type: 'mrkdwn', text: `💃 *Danceability*\n${stats2.danceability}%` },
+          ],
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `😊 *Valence*\n${stats1.valence}%` },
+            { type: 'mrkdwn', text: `😊 *Valence*\n${stats2.valence}%` },
+          ],
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `🔊 *Loudness*\n${stats1.loudness} dB` },
+            { type: 'mrkdwn', text: `🔊 *Loudness*\n${stats2.loudness} dB` },
+          ],
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `🎵 *Common Key*\n${stats1.key}` },
+            { type: 'mrkdwn', text: `🎵 *Common Key*\n${stats2.key}` },
+          ],
+        },
+        divider(),
+        section('🎛️ *Production Style Analysis:*'),
+        section(aiComparison || 'Could not generate comparison. Try again!'),
+        divider(),
+        context(`💡 Use \`/wavmind reference [track name]\` to analyze a specific song from either artist`),
       ],
     });
     return;
@@ -854,22 +869,19 @@ Format professionally with emojis and clear sections.`
     const parts = input.slice(11).trim();
     const bpmMatch = parts.match(/bpm[:\s]+(\d+)/i);
     const keyMatch = parts.match(/key[:\s]+([\w#b_]+)/i);
-
     if (!bpmMatch || !keyMatch) {
       await respond({
         blocks: [
           header('❗ Missing BPM or Key'),
-          section('Please provide both BPM and key.\n\n*Format:*\n`/wavmind mixfeedback bpm:140 key:F_minor`\n\n*Key examples:*\n`C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major`'),
+          section('*Format:*\n`/wavmind mixfeedback bpm:140 key:F_minor`\n\n*Key examples:*\n`C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major`'),
           context('💡 Find your BPM and Key in your DAW'),
         ],
       });
       return;
     }
-
     const bpm = parseInt(bpmMatch[1]);
     const key = keyMatch[1].replace(/_/g, ' ');
     const stored = global.pendingAnalysis?.[command.channel_id];
-
     await respond({
       blocks: [
         header('🎚️ Generating Mix Feedback...'),
@@ -877,39 +889,23 @@ Format professionally with emojis and clear sections.`
         context('⏳ Analyzing your track...'),
       ],
     });
-
     const contextInfo = stored
       ? `Energy: ${stored.energy}%, Brightness: ${stored.brightness}, Bass presence: ${stored.bass_ratio}%`
       : '';
-
     const response = await askAI(
       `You are Wavmind, a professional mixing engineer. Producer track details:
-BPM: ${bpm}
-Key: ${key}
+BPM: ${bpm}, Key: ${key}
 ${contextInfo}
-
-Give specific professional mixing feedback including:
-- What BPM and key suggest about genre and mood
-- EQ advice based on brightness and bass ratio if available
-- Compression and dynamics recommendations
-- Arrangement and energy flow suggestions
-- 3 specific improvements for a more professional sound
-
-Use real plugin names and techniques. Format with emojis and clear sections.`
+Give specific professional mixing feedback including: what BPM and key suggest about genre and mood, EQ advice, compression recommendations, arrangement suggestions, 3 specific improvements. Use real plugin names. Format with emojis.`
     );
-
     if (global.pendingAnalysis?.[command.channel_id]) {
       delete global.pendingAnalysis[command.channel_id];
     }
-
     await respond({
       blocks: [
         header('🎛️ Mix Feedback'),
         twoCol(`🥁 *BPM*\n${bpm}`, `🎵 *Key*\n${key}`),
-        stored ? twoCol(
-          `⚡ *Energy*\n${stored.energy}%`,
-          `🔊 *Bass*\n${stored.bass_ratio}%`
-        ) : divider(),
+        stored ? twoCol(`⚡ *Energy*\n${stored.energy}%`, `🔊 *Bass*\n${stored.bass_ratio}%`) : divider(),
         divider(),
         section(response || 'Could not generate feedback. Try again!'),
         divider(),
@@ -931,7 +927,6 @@ Use real plugin names and techniques. Format with emojis and clear sections.`
       });
       return;
     }
-
     await respond({
       blocks: [
         header('🔍 Looking Up on Spotify...'),
@@ -939,16 +934,12 @@ Use real plugin names and techniques. Format with emojis and clear sections.`
         context('⏳ Fetching real audio data...'),
       ],
     });
-
     const features = await getTrackFeatures(trackQuery);
-
     if (features) {
       const response = await askAI(
         `You are Wavmind, a professional mixing engineer. Give advice on achieving the sound of:
 Track: ${features.name} by ${features.artist}
-BPM: ${features.bpm}, Key: ${features.key}
-Energy: ${features.energy}%, Danceability: ${features.danceability}%
-Loudness: ${features.loudness} dB, Valence: ${features.valence}%
+BPM: ${features.bpm}, Key: ${features.key}, Energy: ${features.energy}%, Danceability: ${features.danceability}%, Loudness: ${features.loudness}dB, Valence: ${features.valence}%
 Cover: tempo, key, energy, mixing targets, overall vibe. Be specific.`
       );
       await respond({
