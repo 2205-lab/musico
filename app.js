@@ -137,37 +137,176 @@ function context(text) {
   };
 }
 
-function button(text, actionId, value) {
-  return {
-    type: 'actions',
-    elements: [{
-      type: 'button',
-      text: { type: 'plain_text', text, emoji: true },
-      action_id: actionId,
-      value,
-      style: 'primary',
-    }],
-  };
-}
-
 // ─── WELCOME BLOCKS ───────────────────────────────────────
 function getWelcomeBlocks() {
   return [
-    header('🎛️ Welcome to Musico'),
+    header('🎛️ Welcome to Wavmind'),
     section('*Your AI assistant for music production.* Here\'s everything I can do:'),
     divider(),
-    section('*🎵 Track Ideas*\n`/musico ideas [genre/mood]`\n_Example: `/musico ideas dark trap beat`_'),
-    section('*🎚️ Mixing Feedback*\n`/musico feedback [describe your mix]`\n_Example: `/musico feedback my beat feels muddy at 140bpm`_'),
-    section('*🔍 Reference Track Analysis*\n`/musico reference [track - artist]`\n_Pulls real Spotify data and gives you a sound blueprint_\n_Example: `/musico reference Blinding Lights - The Weeknd`_'),
-    section('*🥁 BPM & Key Suggestions*\n`/musico bpm [mood or genre]`\n_Example: `/musico bpm dark cinematic hip hop`_'),
-    section('*🎹 Chord Progressions*\n`/musico chords [key + genre]`\n_Example: `/musico chords F minor trap`_'),
-    section('*💡 Production Tips*\n`/musico tips [topic]`\n_Example: `/musico tips 808 mixing`_'),
+    section('*🎵 Track Ideas*\n`/wavmind ideas [genre/mood]`\n_Example: `/wavmind ideas dark trap beat`_'),
+    section('*🎚️ Mixing Feedback*\n`/wavmind feedback [describe your mix]`\n_Example: `/wavmind feedback my beat feels muddy at 140bpm`_'),
+    section('*🔍 Reference Track Analysis*\n`/wavmind reference [track - artist]`\n_Pulls real Spotify data and gives you a sound blueprint_\n_Example: `/wavmind reference Blinding Lights - The Weeknd`_'),
+    section('*🥁 BPM & Key Suggestions*\n`/wavmind bpm [mood or genre]`\n_Example: `/wavmind bpm dark cinematic hip hop`_'),
+    section('*🎹 Chord Progressions*\n`/wavmind chords [key + genre]`\n_Example: `/wavmind chords F minor trap`_'),
+    section('*💡 Production Tips*\n`/wavmind tips [topic]`\n_Example: `/wavmind tips 808 mixing`_'),
     divider(),
-    section('*🎛️ Audio File Analysis + Mix Feedback*\n*Step 1:* Upload any MP3 or WAV file directly in Slack\n*Step 2:* I scan your track\'s energy, brightness and bass\n*Step 3:* You tell me your BPM and Key from your DAW\n*Step 4:* I give you professional AI mixing feedback\n\n`/musico mixfeedback bpm:85 key:F_minor`\n_Key format: `C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major`_'),
+    section('*🎛️ Audio File Analysis + Mix Feedback*\n*Step 1:* Upload any MP3 or WAV file directly in Slack\n*Step 2:* Wavmind scans energy, brightness and bass\n*Step 3:* Tell me your BPM and Key from your DAW\n*Step 4:* Get professional AI mixing feedback\n\n`/wavmind mixfeedback bpm:85 key:F_minor`\n_Key format: `C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major`_'),
     divider(),
     context('💬 Or just @mention me and ask anything about music production!'),
   ];
 }
+
+// ─── APP HOME ─────────────────────────────────────────────
+app.event('app_home_opened', async ({ event, client }) => {
+  try {
+    await client.views.publish({
+      user_id: event.user,
+      view: {
+        type: 'home',
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '*🎛️ Wavmind*\n_AI Assistant for Music Producers_',
+            },
+          },
+          { type: 'divider' },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '🎵 *What can Wavmind do for you?*',
+            },
+          },
+          {
+            type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: '🎵 *Track Ideas*\nGenerate creative track concepts for any genre or mood',
+              },
+              {
+                type: 'mrkdwn',
+                text: '🎚️ *Mix Feedback*\nGet professional mixing advice for your beats',
+              },
+            ],
+          },
+          {
+            type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: '🔍 *Reference Tracks*\nPull real Spotify data from any song and get a sound blueprint',
+              },
+              {
+                type: 'mrkdwn',
+                text: '🎹 *Chord Progressions*\nMusic theory-based chord ideas for any key and genre',
+              },
+            ],
+          },
+          {
+            type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: '🥁 *BPM & Key*\nIdeal tempo and key suggestions for any mood',
+              },
+              {
+                type: 'mrkdwn',
+                text: '💡 *Production Tips*\nExpert tips on any music production topic',
+              },
+            ],
+          },
+          {
+            type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: '🎛️ *Audio Analysis*\nUpload MP3/WAV — Wavmind scans energy, brightness and bass',
+              },
+              {
+                type: 'mrkdwn',
+                text: '🤖 *AI Chat*\n@mention Wavmind anywhere and ask anything',
+              },
+            ],
+          },
+          { type: 'divider' },
+          {
+            type: 'header',
+            text: { type: 'plain_text', text: '🚀 Quick Start', emoji: true },
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '*Try these commands in any channel:*\n\n`/wavmind ideas dark trap beat`\n`/wavmind reference Blinding Lights - The Weeknd`\n`/wavmind bpm dark cinematic hip hop`\n`/wavmind chords F minor trap`\n`/wavmind tips 808 mixing`\n`/wavmind feedback my beat feels muddy at 140bpm`',
+            },
+          },
+          { type: 'divider' },
+          {
+            type: 'header',
+            text: { type: 'plain_text', text: '🎛️ Audio Analysis Workflow', emoji: true },
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '*Step 1* — Upload any MP3 or WAV file in any channel\n*Step 2* — Wavmind scans energy, brightness, bass and duration\n*Step 3* — You provide your BPM and Key from your DAW\n*Step 4* — Wavmind gives you professional AI mixing feedback',
+            },
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '```/wavmind mixfeedback bpm:85 key:F_minor```',
+            },
+          },
+          {
+            type: 'context',
+            elements: [
+              {
+                type: 'mrkdwn',
+                text: '💡 Key format: `C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major` · `D_major` · `E_minor`',
+              },
+            ],
+          },
+          { type: 'divider' },
+          {
+            type: 'header',
+            text: { type: 'plain_text', text: '📊 About Wavmind', emoji: true },
+          },
+          {
+            type: 'section',
+            fields: [
+              { type: 'mrkdwn', text: '🤖 *AI Engine*\nGroq — Llama 3.1' },
+              { type: 'mrkdwn', text: '🎵 *Music Data*\nReal Spotify API' },
+            ],
+          },
+          {
+            type: 'section',
+            fields: [
+              { type: 'mrkdwn', text: '🎧 *Audio Analysis*\nLibrosa Python' },
+              { type: 'mrkdwn', text: '⚡ *Response Time*\nUnder 3 seconds' },
+            ],
+          },
+          { type: 'divider' },
+          {
+            type: 'context',
+            elements: [
+              {
+                type: 'mrkdwn',
+                text: '🎛️ *Wavmind* — Built for music producers | Type `/wavmind` in any channel to get started',
+              },
+            ],
+          },
+        ],
+      },
+    });
+  } catch (err) {
+    console.error('App Home error:', err.message);
+  }
+});
 
 // ─── FILE UPLOAD HANDLER ─────────────────────────────────
 app.event('file_shared', async ({ event, client }) => {
@@ -228,8 +367,8 @@ app.event('file_shared', async ({ event, client }) => {
           `⏱️ *Duration*\n${mins}:${secs}`
         ),
         divider(),
-        section('*🎵 Ready for AI mixing feedback?*\n\nTell me your BPM and Key from your DAW for accurate professional feedback:'),
-        section('```/musico mixfeedback bpm:85 key:F_minor```'),
+        section('*🎵 Ready for AI mixing feedback?*\n\nTell me your BPM and Key from your DAW:'),
+        section('```/wavmind mixfeedback bpm:85 key:F_minor```'),
         section('*Key format examples:*\n`C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major` · `D_major` · `E_minor`'),
         context('💡 Find your BPM and Key in FL Studio, Ableton, Logic or any DAW'),
       ],
@@ -241,7 +380,7 @@ app.event('file_shared', async ({ event, client }) => {
 });
 
 // ─── SLASH COMMANDS ───────────────────────────────────────
-app.command('/musico', async ({ command, ack, respond }) => {
+app.command('/wavmind', async ({ command, ack, respond }) => {
   await ack();
   const input = command.text.trim();
   const lower = input.toLowerCase();
@@ -262,10 +401,11 @@ app.command('/musico', async ({ command, ack, respond }) => {
       blocks: [
         header('🎵 Generating Track Ideas...'),
         section(`Genre/mood: *${genre}*`),
+        context('⏳ Thinking creatively...'),
       ],
     });
     const response = await askAI(
-      `You are Musico, an expert AI music producer assistant. Generate 5 creative and unique track title ideas with brief concept descriptions for: "${genre}". Format each as: 🎵 *Title* — concept description. Be specific and inspiring.`
+      `You are Wavmind, an expert AI music producer assistant. Generate 5 creative and unique track title ideas with brief concept descriptions for: "${genre}". Format each as: 🎵 *Title* — concept description. Be specific and inspiring.`
     );
     await respond({
       blocks: [
@@ -274,7 +414,7 @@ app.command('/musico', async ({ command, ack, respond }) => {
         divider(),
         section(response || 'Could not generate ideas. Try again!'),
         divider(),
-        context('💡 Use `/musico bpm [genre]` to get BPM and key suggestions for your track'),
+        context('💡 Use `/wavmind bpm [genre]` to get BPM and key suggestions for your track'),
       ],
     });
     return;
@@ -287,7 +427,7 @@ app.command('/musico', async ({ command, ack, respond }) => {
       await respond({
         blocks: [
           header('❗ Missing Description'),
-          section('Please describe your mix so I can give feedback.\n\n*Example:*\n`/musico feedback My trap beat at 140bpm feels muddy in the low end`'),
+          section('Please describe your mix.\n\n*Example:*\n`/wavmind feedback My trap beat at 140bpm feels muddy in the low end`'),
         ],
       });
       return;
@@ -300,7 +440,7 @@ app.command('/musico', async ({ command, ack, respond }) => {
       ],
     });
     const response = await askAI(
-      `You are Musico, a professional mixing engineer AI. Give detailed, actionable mixing feedback for: "${description}". Include EQ, compression, stereo width, frequency balance advice. Use music production terminology. Format with clear sections using emojis.`
+      `You are Wavmind, a professional mixing engineer AI. Give detailed actionable mixing feedback for: "${description}". Include EQ, compression, stereo width, frequency balance advice. Use music production terminology. Format with clear sections using emojis.`
     );
     await respond({
       blocks: [
@@ -309,7 +449,7 @@ app.command('/musico', async ({ command, ack, respond }) => {
         divider(),
         section(response || 'Could not analyze. Try again!'),
         divider(),
-        context('💡 Upload your MP3/WAV for audio scan, then use `/musico mixfeedback bpm:140 key:F_minor` for deeper feedback'),
+        context('💡 Upload your MP3/WAV then use `/wavmind mixfeedback bpm:140 key:F_minor` for deeper feedback'),
       ],
     });
     return;
@@ -325,7 +465,7 @@ app.command('/musico', async ({ command, ack, respond }) => {
       await respond({
         blocks: [
           header('❗ Missing BPM or Key'),
-          section('Please provide both BPM and key.\n\n*Format:*\n`/musico mixfeedback bpm:140 key:F_minor`\n\n*Key examples:*\n`C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major`'),
+          section('Please provide both BPM and key.\n\n*Format:*\n`/wavmind mixfeedback bpm:140 key:F_minor`\n\n*Key examples:*\n`C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major`'),
           context('💡 Find your BPM and Key in your DAW'),
         ],
       });
@@ -349,7 +489,7 @@ app.command('/musico', async ({ command, ack, respond }) => {
       : '';
 
     const response = await askAI(
-      `You are Musico, a professional mixing engineer. Producer's track details:
+      `You are Wavmind, a professional mixing engineer. Producer track details:
 BPM: ${bpm}
 Key: ${key}
 ${contextInfo}
@@ -358,7 +498,7 @@ Give specific professional mixing feedback including:
 - What BPM and key suggest about genre and mood
 - EQ advice based on brightness and bass ratio if available
 - Compression and dynamics recommendations
-- Arrangement and energy flow suggestions  
+- Arrangement and energy flow suggestions
 - 3 specific improvements for a more professional sound
 
 Use real plugin names and techniques. Format with emojis and clear sections.`
@@ -379,7 +519,7 @@ Use real plugin names and techniques. Format with emojis and clear sections.`
         divider(),
         section(response || 'Could not generate feedback. Try again!'),
         divider(),
-        context('💡 Use `/musico reference [track name]` to compare your sound with a professional mix'),
+        context('💡 Use `/wavmind reference [track name]` to compare your sound with a professional mix'),
       ],
     });
     return;
@@ -392,7 +532,7 @@ Use real plugin names and techniques. Format with emojis and clear sections.`
       await respond({
         blocks: [
           header('❗ Missing Track Name'),
-          section('Please provide a track name.\n\n*Example:*\n`/musico reference Blinding Lights - The Weeknd`'),
+          section('Please provide a track name.\n\n*Example:*\n`/wavmind reference Blinding Lights - The Weeknd`'),
         ],
       });
       return;
@@ -410,7 +550,7 @@ Use real plugin names and techniques. Format with emojis and clear sections.`
 
     if (features) {
       const response = await askAI(
-        `You are Musico, a professional mixing engineer. Give advice on achieving the sound of:
+        `You are Wavmind, a professional mixing engineer. Give advice on achieving the sound of:
 Track: ${features.name} by ${features.artist}
 BPM: ${features.bpm}, Key: ${features.key}
 Energy: ${features.energy}%, Danceability: ${features.danceability}%
@@ -430,12 +570,12 @@ Cover: tempo, key, energy, mixing targets, overall vibe. Be specific.`
           section('🎛️ *How to achieve this sound:*'),
           section(response || 'Could not generate advice. Try again!'),
           divider(),
-          context('💡 Upload your track and use `/musico mixfeedback` to compare your mix'),
+          context('💡 Upload your track and use `/wavmind mixfeedback` to compare your mix'),
         ],
       });
     } else {
       const response = await askAI(
-        `You are Musico, a professional mixing engineer. Give detailed advice on achieving the sound of "${trackQuery}". Cover tempo, key, mixing approach, signature sounds, and overall vibe.`
+        `You are Wavmind, a professional mixing engineer. Give detailed advice on achieving the sound of "${trackQuery}". Cover tempo, key, mixing approach, signature sounds, and overall vibe.`
       );
       await respond({
         blocks: [
@@ -461,7 +601,7 @@ Cover: tempo, key, energy, mixing targets, overall vibe. Be specific.`
       ],
     });
     const response = await askAI(
-      `You are Musico, expert music producer AI. For "${mood}" suggest: ideal BPM range, best musical keys, chord progressions, typical song structure. Be specific with numbers.`
+      `You are Wavmind, expert music producer AI. For "${mood}" suggest: ideal BPM range, best musical keys, chord progressions, typical song structure. Be specific with numbers.`
     );
     await respond({
       blocks: [
@@ -470,7 +610,7 @@ Cover: tempo, key, energy, mixing targets, overall vibe. Be specific.`
         divider(),
         section(response || 'Could not generate. Try again!'),
         divider(),
-        context('💡 Use `/musico chords [key + genre]` to get chord progressions'),
+        context('💡 Use `/wavmind chords [key + genre]` to get chord progressions'),
       ],
     });
     return;
@@ -487,7 +627,7 @@ Cover: tempo, key, energy, mixing targets, overall vibe. Be specific.`
       ],
     });
     const response = await askAI(
-      `You are Musico, expert music theory AI for producers. Generate 3 chord progressions for: "${query}". For each show: chord names, Roman numeral analysis, emotional feel, suggested melody note. Format clearly.`
+      `You are Wavmind, expert music theory AI for producers. Generate 3 chord progressions for: "${query}". For each show: chord names, Roman numeral analysis, emotional feel, suggested melody note. Format clearly.`
     );
     await respond({
       blocks: [
@@ -496,7 +636,7 @@ Cover: tempo, key, energy, mixing targets, overall vibe. Be specific.`
         divider(),
         section(response || 'Could not generate. Try again!'),
         divider(),
-        context('💡 Use `/musico bpm [genre]` to find the ideal tempo for these chords'),
+        context('💡 Use `/wavmind bpm [genre]` to find the ideal tempo for these chords'),
       ],
     });
     return;
@@ -513,7 +653,7 @@ Cover: tempo, key, energy, mixing targets, overall vibe. Be specific.`
       ],
     });
     const response = await askAI(
-      `You are Musico, expert music producer AI. Give 5 professional actionable tips about "${topic}". Use real techniques and tool names. Format with emojis and bold titles.`
+      `You are Wavmind, expert music producer AI. Give 5 professional actionable tips about "${topic}". Use real techniques and tool names. Format with emojis and bold titles.`
     );
     await respond({
       blocks: [
@@ -522,7 +662,7 @@ Cover: tempo, key, energy, mixing targets, overall vibe. Be specific.`
         divider(),
         section(response || 'Could not generate. Try again!'),
         divider(),
-        context('💡 Use `/musico feedback [describe your mix]` to get personalized mixing advice'),
+        context('💡 Use `/wavmind feedback [describe your mix]` to get personalized mixing advice'),
       ],
     });
     return;
@@ -536,14 +676,14 @@ Cover: tempo, key, energy, mixing targets, overall vibe. Be specific.`
     ],
   });
   const response = await askAI(
-    `You are Musico, an expert AI assistant for music producers. Answer professionally: "${input}"`
+    `You are Wavmind, an expert AI assistant for music producers. Answer professionally: "${input}"`
   );
   await respond({
     blocks: [
-      header('🎛️ Musico'),
+      header('🎛️ Wavmind'),
       section(response || 'Could not respond. Try again!'),
       divider(),
-      context('💡 Type `/musico` to see all available commands'),
+      context('💡 Type `/wavmind` to see all available commands'),
     ],
   });
 });
@@ -556,14 +696,14 @@ app.event('app_mention', async ({ event, say }) => {
     return;
   }
   const response = await askAI(
-    `You are Musico, an expert AI assistant for music producers. Answer professionally: "${input}"`
+    `You are Wavmind, an expert AI assistant for music producers. Answer professionally: "${input}"`
   );
   await say({
     blocks: [
       section(`<@${event.user}>`),
       section(response || 'Could not respond. Try again!'),
       divider(),
-      context('💡 Type `/musico` to see all available commands'),
+      context('💡 Type `/wavmind` to see all available commands'),
     ],
   });
 });
@@ -578,13 +718,13 @@ app.message(async ({ message, say }) => {
     return;
   }
   const response = await askAI(
-    `You are Musico, an expert AI for music producers. Answer: "${message.text}"`
+    `You are Wavmind, an expert AI for music producers. Answer: "${message.text}"`
   );
   await say({
     blocks: [
       section(response || 'Could not respond. Try again!'),
       divider(),
-      context('💡 Type `/musico` to see all available commands'),
+      context('💡 Type `/wavmind` to see all available commands'),
     ],
   });
 });
@@ -592,5 +732,5 @@ app.message(async ({ message, say }) => {
 // ─── START ────────────────────────────────────────────────
 (async () => {
   await app.start();
-  console.log('🎛️ Musico is running!');
+  console.log('🎛️ Wavmind is running!');
 })();
