@@ -20,7 +20,13 @@ async function askAI(prompt) {
   try {
     const response = await groq.chat.completions.create({
       model: 'llama-3.1-8b-instant',
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        {
+          role: 'system',
+          content: 'You are Wavmind, an expert AI assistant for music producers. Always format your responses using Slack mrkdwn: use *bold* for emphasis (single asterisk), _italic_ for subtle text, and • for bullet points. Never use ** double asterisks or # headers. Keep responses clean and scannable.',
+        },
+        { role: 'user', content: prompt }
+      ],
       max_tokens: 1024,
     });
     return response.choices[0].message.content;
