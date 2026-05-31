@@ -1,5 +1,5 @@
 {
-  "name": "musico",
+  "name": "wavmind",
   "version": "1.0.0",
   "description": "AI assistant for music producers",
   "main": "app.js",
