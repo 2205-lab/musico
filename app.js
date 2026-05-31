@@ -23,13 +23,23 @@ async function askAI(prompt) {
       messages: [
         {
           role: 'system',
-          content: 'You are Wavmind, an expert AI assistant for music producers. Always format your responses using Slack mrkdwn: use *bold* for emphasis (single asterisk), _italic_ for subtle text, and • for bullet points. Never use ** double asterisks or # headers. Keep responses clean and scannable.',
+          content: 'You are Wavmind, an expert AI assistant for music producers. Format responses using Slack mrkdwn only. Use *text* for bold (single asterisk only). Use _text_ for italic. Use • for bullet points. Never use ** double asterisks, never use ### or ## or # for headers. Keep responses clean and scannable.',
         },
         { role: 'user', content: prompt }
       ],
       max_tokens: 1024,
     });
-    return response.choices[0].message.content;
+
+    let text = response.choices[0].message.content;
+
+    // Clean markdown that Slack does not render
+    text = text.replace(/#{1,6}\s+/g, '*');
+    text = text.replace(/\*\*([^*]+)\*\*/g, '*$1*');
+    text = text.replace(/^-\s+/gm, '• ');
+    text = text.replace(/^\d+\.\s+/gm, '• ');
+
+    return text;
+
   } catch (err) {
     console.error('Groq error:', err.message);
     return null;
