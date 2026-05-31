@@ -83,123 +83,130 @@ async function analyzeAudioFile(fileUrl, filename) {
   const tmpDir = '/tmp';
   const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
   const filePath = path.join(tmpDir, safeName);
-
   try {
-    console.log('Downloading file:', fileUrl);
     const response = await axios.get(fileUrl, {
       headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` },
       responseType: 'arraybuffer',
       timeout: 30000,
     });
-
     fs.writeFileSync(filePath, response.data);
-    console.log('File saved:', filePath, fs.statSync(filePath).size, 'bytes');
-
-    const result = execSync(
-      `python3 analyze.py "${filePath}"`,
-      { timeout: 60000 }
-    ).toString().trim();
-
-    console.log('Python result:', result);
+    const result = execSync(`python3 analyze.py "${filePath}"`, { timeout: 60000 }).toString().trim();
     const analysis = JSON.parse(result);
-
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     return analysis;
-
   } catch (err) {
     console.error('Audio analysis error:', err.message);
-    if (err.stdout) console.error('stdout:', err.stdout.toString());
-    if (err.stderr) console.error('stderr:', err.stderr.toString());
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     return { error: err.message };
   }
 }
 
-// ─── WELCOME MESSAGE ─────────────────────────────────────
-function getWelcomeMessage() {
-  return `🎛️ *Welcome to Musico — AI Assistant for Music Producers!*
+// ─── BLOCK KIT HELPERS ───────────────────────────────────
+function divider() {
+  return { type: 'divider' };
+}
 
-Here's everything I can do:
+function header(text) {
+  return {
+    type: 'header',
+    text: { type: 'plain_text', text, emoji: true },
+  };
+}
 
-*🎵 Track Ideas*
-\`/musico ideas [genre/mood]\`
-_Example: \`/musico ideas dark trap beat\`_
+function section(text) {
+  return {
+    type: 'section',
+    text: { type: 'mrkdwn', text },
+  };
+}
 
-*🎚️ Mixing Feedback*
-\`/musico feedback [describe your mix]\`
-_Example: \`/musico feedback my beat feels muddy at 140bpm\`_
+function twoCol(left, right) {
+  return {
+    type: 'section',
+    fields: [
+      { type: 'mrkdwn', text: left },
+      { type: 'mrkdwn', text: right },
+    ],
+  };
+}
 
-*🔍 Reference Track Analysis*
-\`/musico reference [track - artist]\`
-_Pulls real Spotify audio data and gives you a blueprint_
-_Example: \`/musico reference Blinding Lights - The Weeknd\`_
+function context(text) {
+  return {
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text }],
+  };
+}
 
-*🥁 BPM & Key Suggestions*
-\`/musico bpm [mood or genre]\`
-_Example: \`/musico bpm dark cinematic hip hop\`_
+function button(text, actionId, value) {
+  return {
+    type: 'actions',
+    elements: [{
+      type: 'button',
+      text: { type: 'plain_text', text, emoji: true },
+      action_id: actionId,
+      value,
+      style: 'primary',
+    }],
+  };
+}
 
-*🎹 Chord Progressions*
-\`/musico chords [key + genre]\`
-_Example: \`/musico chords F minor trap\`_
-
-*💡 Production Tips*
-\`/musico tips [topic]\`
-_Example: \`/musico tips 808 mixing\`_
-
-*🎛️ Mix Feedback with Your BPM & Key*
-\`/musico mixfeedback bpm:[number] key:[key_mode]\`
-_Use this after uploading a track for accurate feedback_
-_Example: \`/musico mixfeedback bpm:85 key:F_minor\`_
-_Key format: \`C_major\` \`F_minor\` \`G_major\` \`A_minor\` \`Bb_major\`_
-
-*🎵 Audio File Analysis*
-_Upload any MP3 or WAV directly in Slack!_
-_I will scan the energy, brightness, bass presence and duration_
-_Then use \`/musico mixfeedback bpm:85 key:F_minor\` for full AI feedback_
-
-Or just \`@Musico\` and ask me anything about music production! 🎧`;
+// ─── WELCOME BLOCKS ───────────────────────────────────────
+function getWelcomeBlocks() {
+  return [
+    header('🎛️ Welcome to Musico'),
+    section('*Your AI assistant for music production.* Here\'s everything I can do:'),
+    divider(),
+    section('*🎵 Track Ideas*\n`/musico ideas [genre/mood]`\n_Example: `/musico ideas dark trap beat`_'),
+    section('*🎚️ Mixing Feedback*\n`/musico feedback [describe your mix]`\n_Example: `/musico feedback my beat feels muddy at 140bpm`_'),
+    section('*🔍 Reference Track Analysis*\n`/musico reference [track - artist]`\n_Pulls real Spotify data and gives you a sound blueprint_\n_Example: `/musico reference Blinding Lights - The Weeknd`_'),
+    section('*🥁 BPM & Key Suggestions*\n`/musico bpm [mood or genre]`\n_Example: `/musico bpm dark cinematic hip hop`_'),
+    section('*🎹 Chord Progressions*\n`/musico chords [key + genre]`\n_Example: `/musico chords F minor trap`_'),
+    section('*💡 Production Tips*\n`/musico tips [topic]`\n_Example: `/musico tips 808 mixing`_'),
+    divider(),
+    section('*🎛️ Audio File Analysis + Mix Feedback*\n*Step 1:* Upload any MP3 or WAV file directly in Slack\n*Step 2:* I scan your track\'s energy, brightness and bass\n*Step 3:* You tell me your BPM and Key from your DAW\n*Step 4:* I give you professional AI mixing feedback\n\n`/musico mixfeedback bpm:85 key:F_minor`\n_Key format: `C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major`_'),
+    divider(),
+    context('💬 Or just @mention me and ask anything about music production!'),
+  ];
 }
 
 // ─── FILE UPLOAD HANDLER ─────────────────────────────────
 app.event('file_shared', async ({ event, client }) => {
   try {
-    console.log('File shared:', event);
-
     const fileInfo = await client.files.info({ file: event.file_id });
     const file = fileInfo.file;
-
-    console.log('File:', file.name, file.mimetype, file.size);
-
     const audioTypes = ['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg'];
     const ext = file.name.split('.').pop().toLowerCase();
     if (!audioTypes.includes(ext)) return;
 
     await client.chat.postMessage({
       channel: event.channel_id,
-      text: `🎵 *Scanning "${file.name}"...*\nAnalyzing energy, brightness, bass and duration. Takes about 15 seconds...`,
+      blocks: [
+        header('🎵 Scanning Your Track...'),
+        section(`*File:* ${file.name}\nRunning energy, brightness and bass analysis. Takes about 15 seconds...`),
+        context('⏳ Please wait'),
+      ],
     });
 
-    const analysis = await analyzeAudioFile(
-      file.url_private_download,
-      file.name
-    );
+    const analysis = await analyzeAudioFile(file.url_private_download, file.name);
 
     if (!analysis || analysis.error) {
       await client.chat.postMessage({
         channel: event.channel_id,
-        text: `❗ Could not scan "${file.name}".\nError: ${analysis?.error || 'Unknown error'}\n\nTry uploading a smaller file (under 10MB) or use MP3 format.`,
+        blocks: [
+          header('❗ Scan Failed'),
+          section(`Could not analyze *${file.name}*.\n\nTry uploading a smaller file (under 10MB) or use MP3 format.`),
+          context(`Error: ${analysis?.error || 'Unknown error'}`),
+        ],
       });
       return;
     }
 
-    // Store analysis for this channel
     global.pendingAnalysis = global.pendingAnalysis || {};
     global.pendingAnalysis[event.channel_id] = {
       filename: file.name,
       energy: analysis.energy,
       brightness: analysis.brightness,
       bass_ratio: analysis.bass_ratio,
-      danceability: analysis.danceability,
       duration: analysis.duration,
     };
 
@@ -208,31 +215,28 @@ app.event('file_shared', async ({ event, client }) => {
 
     await client.chat.postMessage({
       channel: event.channel_id,
-      text: `🎛️ *Scan Complete: ${file.name}*
-
-📊 *What I detected:*
-- ⚡ Energy: *${analysis.energy}%*
-- 🌈 Brightness: *${analysis.brightness}*
-- 🔊 Bass presence: *${analysis.bass_ratio}%*
-- ⏱️ Duration: *${mins}:${secs}*
-
-━━━━━━━━━━━━━━━━━━━━━━
-🎵 *Ready for AI mixing feedback?*
-
-Since you know your track best, tell me your BPM and Key for accurate professional feedback:
-
-\`/musico mixfeedback bpm:85 key:F_minor\`
-
-*Key format examples:*
-C_major · F_minor · G_major · A_minor · Bb_major · D_major · E_minor
-
-💡 _You can find your BPM and Key in your DAW (FL Studio, Ableton, Logic etc.)_
-━━━━━━━━━━━━━━━━━━━━━━`,
+      blocks: [
+        header('🎛️ Scan Complete'),
+        section(`*File:* ${file.name}`),
+        divider(),
+        twoCol(
+          `⚡ *Energy*\n${analysis.energy}%`,
+          `🌈 *Brightness*\n${analysis.brightness}`
+        ),
+        twoCol(
+          `🔊 *Bass Presence*\n${analysis.bass_ratio}%`,
+          `⏱️ *Duration*\n${mins}:${secs}`
+        ),
+        divider(),
+        section('*🎵 Ready for AI mixing feedback?*\n\nTell me your BPM and Key from your DAW for accurate professional feedback:'),
+        section('```/musico mixfeedback bpm:85 key:F_minor```'),
+        section('*Key format examples:*\n`C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major` · `D_major` · `E_minor`'),
+        context('💡 Find your BPM and Key in FL Studio, Ableton, Logic or any DAW'),
+      ],
     });
 
   } catch (err) {
     console.error('File handler error:', err.message);
-    console.error(err.stack);
   }
 });
 
@@ -244,18 +248,35 @@ app.command('/musico', async ({ command, ack, respond }) => {
 
   // HELP / EMPTY
   if (!input || lower === 'help') {
-    await respond({ text: getWelcomeMessage() });
+    await respond({
+      response_type: 'ephemeral',
+      blocks: getWelcomeBlocks(),
+    });
     return;
   }
 
   // IDEAS
   if (lower.startsWith('ideas')) {
     const genre = input.slice(5).trim() || 'general';
-    await respond({ text: '🎵 Generating track ideas...' });
+    await respond({
+      blocks: [
+        header('🎵 Generating Track Ideas...'),
+        section(`Genre/mood: *${genre}*`),
+      ],
+    });
     const response = await askAI(
-      `You are Musico, an expert AI music producer assistant. Generate 5 creative and unique track title ideas with brief concept descriptions for this genre/mood: "${genre}". Format each as: 🎵 *Title* — concept description. Be specific and inspiring.`
+      `You are Musico, an expert AI music producer assistant. Generate 5 creative and unique track title ideas with brief concept descriptions for: "${genre}". Format each as: 🎵 *Title* — concept description. Be specific and inspiring.`
     );
-    await respond({ text: response || 'Could not generate ideas. Try again!' });
+    await respond({
+      blocks: [
+        header('🎵 Track Ideas'),
+        section(`*Genre/Mood:* ${genre}`),
+        divider(),
+        section(response || 'Could not generate ideas. Try again!'),
+        divider(),
+        context('💡 Use `/musico bpm [genre]` to get BPM and key suggestions for your track'),
+      ],
+    });
     return;
   }
 
@@ -264,19 +285,37 @@ app.command('/musico', async ({ command, ack, respond }) => {
     const description = input.slice(8).trim();
     if (!description) {
       await respond({
-        text: '❗ Please describe your mix.\n\n_Example: `/musico feedback My trap beat at 140bpm feels muddy in the low end`_',
+        blocks: [
+          header('❗ Missing Description'),
+          section('Please describe your mix so I can give feedback.\n\n*Example:*\n`/musico feedback My trap beat at 140bpm feels muddy in the low end`'),
+        ],
       });
       return;
     }
-    await respond({ text: '🎚️ Analyzing your mix...' });
+    await respond({
+      blocks: [
+        header('🎚️ Analyzing Your Mix...'),
+        section(`_"${description}"_`),
+        context('⏳ Generating professional feedback...'),
+      ],
+    });
     const response = await askAI(
-      `You are Musico, a professional mixing engineer AI. Give detailed, actionable mixing feedback for this track description: "${description}". Include specific advice on: EQ frequencies, compression settings, stereo width, frequency balance, and arrangement. Use music production terminology. Format with clear sections using emojis.`
+      `You are Musico, a professional mixing engineer AI. Give detailed, actionable mixing feedback for: "${description}". Include EQ, compression, stereo width, frequency balance advice. Use music production terminology. Format with clear sections using emojis.`
     );
-    await respond({ text: response || 'Could not analyze. Try again!' });
+    await respond({
+      blocks: [
+        header('🎚️ Mix Feedback'),
+        section(`*Your mix:* _${description}_`),
+        divider(),
+        section(response || 'Could not analyze. Try again!'),
+        divider(),
+        context('💡 Upload your MP3/WAV for audio scan, then use `/musico mixfeedback bpm:140 key:F_minor` for deeper feedback'),
+      ],
+    });
     return;
   }
 
-  // MIXFEEDBACK with manual BPM and key
+  // MIXFEEDBACK
   if (lower.startsWith('mixfeedback')) {
     const parts = input.slice(11).trim();
     const bpmMatch = parts.match(/bpm[:\s]+(\d+)/i);
@@ -284,7 +323,11 @@ app.command('/musico', async ({ command, ack, respond }) => {
 
     if (!bpmMatch || !keyMatch) {
       await respond({
-        text: `❗ Please provide both BPM and key.\n\n*Format:* \`/musico mixfeedback bpm:140 key:F_minor\`\n\n*Key examples:*\nC_major · F_minor · G_major · A_minor · Bb_major · D_major · E_minor\n\n💡 _Find your BPM and Key in your DAW_`,
+        blocks: [
+          header('❗ Missing BPM or Key'),
+          section('Please provide both BPM and key.\n\n*Format:*\n`/musico mixfeedback bpm:140 key:F_minor`\n\n*Key examples:*\n`C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major`'),
+          context('💡 Find your BPM and Key in your DAW'),
+        ],
       });
       return;
     }
@@ -293,25 +336,30 @@ app.command('/musico', async ({ command, ack, respond }) => {
     const key = keyMatch[1].replace(/_/g, ' ');
     const stored = global.pendingAnalysis?.[command.channel_id];
 
-    await respond({ text: '🎚️ Generating your mix feedback...' });
+    await respond({
+      blocks: [
+        header('🎚️ Generating Mix Feedback...'),
+        twoCol(`🥁 *BPM*\n${bpm}`, `🎵 *Key*\n${key}`),
+        context('⏳ Analyzing your track...'),
+      ],
+    });
 
     const contextInfo = stored
       ? `Energy: ${stored.energy}%, Brightness: ${stored.brightness}, Bass presence: ${stored.bass_ratio}%`
       : '';
 
     const response = await askAI(
-      `You are Musico, a professional mixing engineer. A producer shared these details about their track:
-
+      `You are Musico, a professional mixing engineer. Producer's track details:
 BPM: ${bpm}
 Key: ${key}
 ${contextInfo}
 
-Give them specific, professional mixing feedback. Include:
-- What this BPM and key combination suggests about genre and mood
-- Specific EQ advice based on the brightness and bass ratio if available
-- Compression and dynamics recommendations  
-- Arrangement and energy flow suggestions
-- 3 specific things to improve for a more professional sound
+Give specific professional mixing feedback including:
+- What BPM and key suggest about genre and mood
+- EQ advice based on brightness and bass ratio if available
+- Compression and dynamics recommendations
+- Arrangement and energy flow suggestions  
+- 3 specific improvements for a more professional sound
 
 Use real plugin names and techniques. Format with emojis and clear sections.`
     );
@@ -321,7 +369,18 @@ Use real plugin names and techniques. Format with emojis and clear sections.`
     }
 
     await respond({
-      text: `🎛️ *Mix Feedback — ${bpm} BPM · ${key}*\n\n${response || 'Could not generate feedback. Try again!'}`,
+      blocks: [
+        header('🎛️ Mix Feedback'),
+        twoCol(`🥁 *BPM*\n${bpm}`, `🎵 *Key*\n${key}`),
+        stored ? twoCol(
+          `⚡ *Energy*\n${stored.energy}%`,
+          `🔊 *Bass*\n${stored.bass_ratio}%`
+        ) : divider(),
+        divider(),
+        section(response || 'Could not generate feedback. Try again!'),
+        divider(),
+        context('💡 Use `/musico reference [track name]` to compare your sound with a professional mix'),
+      ],
     });
     return;
   }
@@ -331,48 +390,61 @@ Use real plugin names and techniques. Format with emojis and clear sections.`
     const trackQuery = input.slice(9).trim();
     if (!trackQuery) {
       await respond({
-        text: '❗ Please provide a track name.\n\n_Example: `/musico reference Blinding Lights - The Weeknd`_',
+        blocks: [
+          header('❗ Missing Track Name'),
+          section('Please provide a track name.\n\n*Example:*\n`/musico reference Blinding Lights - The Weeknd`'),
+        ],
       });
       return;
     }
-    await respond({ text: `🔍 Looking up "${trackQuery}" on Spotify...` });
+
+    await respond({
+      blocks: [
+        header('🔍 Looking Up on Spotify...'),
+        section(`Searching for *${trackQuery}*`),
+        context('⏳ Fetching real audio data...'),
+      ],
+    });
+
     const features = await getTrackFeatures(trackQuery);
 
     if (features) {
       const response = await askAI(
-        `You are Musico, a professional mixing engineer. Give detailed advice on achieving the sound of this track based on its real Spotify audio data:
-
+        `You are Musico, a professional mixing engineer. Give advice on achieving the sound of:
 Track: ${features.name} by ${features.artist}
-BPM: ${features.bpm}
-Key: ${features.key}
-Energy: ${features.energy}%
-Danceability: ${features.danceability}%
-Loudness: ${features.loudness} dB
-Valence: ${features.valence}%
-
-Cover: tempo and groove, key and harmonic choices, energy and arrangement, mixing targets, overall vibe. Be specific and professional.`
+BPM: ${features.bpm}, Key: ${features.key}
+Energy: ${features.energy}%, Danceability: ${features.danceability}%
+Loudness: ${features.loudness} dB, Valence: ${features.valence}%
+Cover: tempo, key, energy, mixing targets, overall vibe. Be specific.`
       );
       await respond({
-        text: `🎵 *${features.name} by ${features.artist}*
-
-📊 *Real Spotify Data:*
-- 🥁 BPM: *${features.bpm}*
-- 🎵 Key: *${features.key}*
-- ⚡ Energy: *${features.energy}%*
-- 💃 Danceability: *${features.danceability}%*
-- 🔊 Loudness: *${features.loudness} dB*
-- 😊 Valence: *${features.valence}%*
-
-🎛️ *How to achieve this sound:*
-
-${response || 'Could not generate advice. Try again!'}`,
+        blocks: [
+          header('🎵 Reference Track Analysis'),
+          section(`*${features.name}* by *${features.artist}*`),
+          divider(),
+          section('📊 *Real Spotify Data*'),
+          twoCol(`🥁 *BPM*\n${features.bpm}`, `🎵 *Key*\n${features.key}`),
+          twoCol(`⚡ *Energy*\n${features.energy}%`, `💃 *Danceability*\n${features.danceability}%`),
+          twoCol(`🔊 *Loudness*\n${features.loudness} dB`, `😊 *Valence*\n${features.valence}%`),
+          divider(),
+          section('🎛️ *How to achieve this sound:*'),
+          section(response || 'Could not generate advice. Try again!'),
+          divider(),
+          context('💡 Upload your track and use `/musico mixfeedback` to compare your mix'),
+        ],
       });
     } else {
       const response = await askAI(
         `You are Musico, a professional mixing engineer. Give detailed advice on achieving the sound of "${trackQuery}". Cover tempo, key, mixing approach, signature sounds, and overall vibe.`
       );
       await respond({
-        text: `🎛️ *Reference: ${trackQuery}*\n\n${response || 'Could not analyze. Try again!'}`,
+        blocks: [
+          header('🎛️ Reference Analysis'),
+          section(`*Track:* ${trackQuery}`),
+          divider(),
+          section(response || 'Could not analyze. Try again!'),
+          context('💡 Try including the artist name for better results'),
+        ],
       });
     }
     return;
@@ -381,75 +453,140 @@ ${response || 'Could not generate advice. Try again!'}`,
   // BPM
   if (lower.startsWith('bpm')) {
     const mood = input.slice(3).trim() || 'general';
-    await respond({ text: '🥁 Calculating suggestions...' });
+    await respond({
+      blocks: [
+        header('🥁 BPM & Key Suggestions'),
+        section(`*Genre/Mood:* ${mood}`),
+        context('⏳ Calculating...'),
+      ],
+    });
     const response = await askAI(
-      `You are Musico, an expert music producer AI. For the mood/genre "${mood}", suggest: the ideal BPM range, the best musical keys, chord progressions that work well, and the typical song structure. Format with clear sections and be specific with numbers.`
+      `You are Musico, expert music producer AI. For "${mood}" suggest: ideal BPM range, best musical keys, chord progressions, typical song structure. Be specific with numbers.`
     );
-    await respond({ text: response || 'Could not generate. Try again!' });
+    await respond({
+      blocks: [
+        header('🥁 BPM & Key Suggestions'),
+        section(`*Genre/Mood:* ${mood}`),
+        divider(),
+        section(response || 'Could not generate. Try again!'),
+        divider(),
+        context('💡 Use `/musico chords [key + genre]` to get chord progressions'),
+      ],
+    });
     return;
   }
 
   // CHORDS
   if (lower.startsWith('chords')) {
     const query = input.slice(6).trim() || 'C minor trap';
-    await respond({ text: '🎹 Generating chord progressions...' });
+    await respond({
+      blocks: [
+        header('🎹 Generating Chord Progressions...'),
+        section(`*Query:* ${query}`),
+        context('⏳ Applying music theory...'),
+      ],
+    });
     const response = await askAI(
-      `You are Musico, an expert music theory AI for producers. Generate 3 different chord progressions for: "${query}". For each show: the chord names, Roman numeral analysis, emotional feel, and a suggested melody note over each chord. Format clearly with sections.`
+      `You are Musico, expert music theory AI for producers. Generate 3 chord progressions for: "${query}". For each show: chord names, Roman numeral analysis, emotional feel, suggested melody note. Format clearly.`
     );
-    await respond({ text: response || 'Could not generate chords. Try again!' });
+    await respond({
+      blocks: [
+        header('🎹 Chord Progressions'),
+        section(`*Query:* ${query}`),
+        divider(),
+        section(response || 'Could not generate. Try again!'),
+        divider(),
+        context('💡 Use `/musico bpm [genre]` to find the ideal tempo for these chords'),
+      ],
+    });
     return;
   }
 
   // TIPS
   if (lower.startsWith('tips')) {
     const topic = input.slice(4).trim() || 'music production';
-    await respond({ text: '💡 Getting tips...' });
+    await respond({
+      blocks: [
+        header('💡 Production Tips'),
+        section(`*Topic:* ${topic}`),
+        context('⏳ Loading expert knowledge...'),
+      ],
+    });
     const response = await askAI(
-      `You are Musico, an expert music producer AI. Give 5 professional, actionable production tips about "${topic}". Be specific, use real techniques and tool names. Format each tip with an emoji and bold title.`
+      `You are Musico, expert music producer AI. Give 5 professional actionable tips about "${topic}". Use real techniques and tool names. Format with emojis and bold titles.`
     );
-    await respond({ text: response || 'Could not generate tips. Try again!' });
+    await respond({
+      blocks: [
+        header('💡 Production Tips'),
+        section(`*Topic:* ${topic}`),
+        divider(),
+        section(response || 'Could not generate. Try again!'),
+        divider(),
+        context('💡 Use `/musico feedback [describe your mix]` to get personalized mixing advice'),
+      ],
+    });
     return;
   }
 
   // GENERAL
-  await respond({ text: '🤔 Thinking...' });
+  await respond({
+    blocks: [
+      header('🤔 Thinking...'),
+      context('⏳ Processing your question...'),
+    ],
+  });
   const response = await askAI(
-    `You are Musico, an expert AI assistant for music producers. Answer this question professionally and helpfully: "${input}"`
+    `You are Musico, an expert AI assistant for music producers. Answer professionally: "${input}"`
   );
-  await respond({ text: response || 'Could not respond. Try again!' });
+  await respond({
+    blocks: [
+      header('🎛️ Musico'),
+      section(response || 'Could not respond. Try again!'),
+      divider(),
+      context('💡 Type `/musico` to see all available commands'),
+    ],
+  });
 });
 
 // ─── APP MENTION ──────────────────────────────────────────
 app.event('app_mention', async ({ event, say }) => {
   const input = event.text.replace(/<@[^>]+>/g, '').trim();
-
   if (!input) {
-    await say(getWelcomeMessage());
+    await say({ blocks: getWelcomeBlocks() });
     return;
   }
-
   const response = await askAI(
-    `You are Musico, an expert AI assistant for music producers. Answer this question professionally: "${input}"`
+    `You are Musico, an expert AI assistant for music producers. Answer professionally: "${input}"`
   );
-  await say(`<@${event.user}> ${response || 'Could not respond. Try again!'}`);
+  await say({
+    blocks: [
+      section(`<@${event.user}>`),
+      section(response || 'Could not respond. Try again!'),
+      divider(),
+      context('💡 Type `/musico` to see all available commands'),
+    ],
+  });
 });
 
 // ─── DM HANDLER ───────────────────────────────────────────
 app.message(async ({ message, say }) => {
   if (message.subtype) return;
   if (!message.text) return;
-
-  // Show welcome if user says hi
-  const lower = message.text.toLowerCase();
-  if (['hi','hello','hey','start','help'].includes(lower.trim())) {
-    await say(getWelcomeMessage());
+  const lower = message.text.toLowerCase().trim();
+  if (['hi','hello','hey','start','help'].includes(lower)) {
+    await say({ blocks: getWelcomeBlocks() });
     return;
   }
-
   const response = await askAI(
     `You are Musico, an expert AI for music producers. Answer: "${message.text}"`
   );
-  await say(response || 'Could not respond. Try again!');
+  await say({
+    blocks: [
+      section(response || 'Could not respond. Try again!'),
+      divider(),
+      context('💡 Type `/musico` to see all available commands'),
+    ],
+  });
 });
 
 // ─── START ────────────────────────────────────────────────
