@@ -16,22 +16,62 @@ const app = new App({
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// ─── USER TRACKING ────────────────────────────────────────
+// ─── PERSISTENT STORAGE ───────────────────────────────────
+const REMINDERS_FILE = '/tmp/wavmind_reminders.json';
+const STATS_FILE = '/tmp/wavmind_stats.json';
+
+function loadReminders() {
+  try {
+    if (fs.existsSync(REMINDERS_FILE)) return JSON.parse(fs.readFileSync(REMINDERS_FILE, 'utf8'));
+  } catch (err) { console.error('Load reminders error:', err.message); }
+  return {};
+}
+
+function saveReminders(data) {
+  try { fs.writeFileSync(REMINDERS_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { console.error('Save reminders error:', err.message); }
+}
+
+function loadStats() {
+  try {
+    if (fs.existsSync(STATS_FILE)) return JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'));
+  } catch (err) { console.error('Load stats error:', err.message); }
+  return {};
+}
+
+function saveStats(data) {
+  try { fs.writeFileSync(STATS_FILE, JSON.stringify(data, null, 2)); }
+  catch (err) { console.error('Save stats error:', err.message); }
+}
+
+// Load on startup — survives restarts
+global.pendingReminders = loadReminders();
+global.weeklyStats = loadStats();
 global.userUploads = global.userUploads || {};
-global.weeklyStats = global.weeklyStats || {};
 
 function trackUpload(userId, filename, analysis) {
-  if (!global.userUploads[userId]) global.userUploads[userId] = [];
-  global.userUploads[userId].push({
-    filename, analysis,
-    timestamp: new Date().toISOString(),
-    reminderSent: false,
+  // Save reminder due in 24 hours to disk
+  if (!global.pendingReminders[userId]) global.pendingReminders[userId] = [];
+  global.pendingReminders[userId].push({
+    filename,
+    analysis,
+    uploadedAt: new Date().toISOString(),
+    remindAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    sent: false,
   });
+  saveReminders(global.pendingReminders);
+
+  // Track for home tab
+  if (!global.userUploads[userId]) global.userUploads[userId] = [];
+  global.userUploads[userId].push({ filename, analysis, timestamp: new Date().toISOString() });
+
+  // Weekly stats
   if (!global.weeklyStats[userId]) global.weeklyStats[userId] = { tracks: 0, issues: [] };
   global.weeklyStats[userId].tracks++;
   if (analysis.energy < 50) global.weeklyStats[userId].issues.push('Low energy');
   if (analysis.bass_ratio > 65) global.weeklyStats[userId].issues.push('Heavy bass');
   if (analysis.bass_ratio < 20) global.weeklyStats[userId].issues.push('Thin bass');
+  saveStats(global.weeklyStats);
 }
 
 // ─── GROQ AI ─────────────────────────────────────────────
@@ -71,10 +111,7 @@ async function tavilySearch(query) {
       answer: res.data.answer || null,
       results: (res.data.results || []).map(r => ({ title: r.title, url: r.url })),
     };
-  } catch (err) {
-    console.error('Tavily error:', err.message);
-    return null;
-  }
+  } catch (err) { console.error('Tavily error:', err.message); return null; }
 }
 
 // ─── FREESOUND ────────────────────────────────────────────
@@ -87,8 +124,7 @@ async function searchFreesound(query) {
     const url = `https://freesound.org/apiv2/search/text/?query=${encodeURIComponent(clean || query)}&token=${process.env.FREESOUND_API_KEY}&format=json&page_size=10&fields=id,name,tags,duration,license,username,previews,avg_rating,num_downloads&filter=duration:[1+TO+30]`;
     const res = await axios.get(url, { timeout: 10000 });
     return (res.data.results || []).map(s => ({
-      id: s.id,
-      name: s.name,
+      id: s.id, name: s.name,
       duration: Math.round((s.duration || 0) * 10) / 10,
       license: s.license?.includes('publicdomain') ? 'CC0 — Free' : 'CC Attribution',
       username: s.username,
@@ -98,10 +134,7 @@ async function searchFreesound(query) {
       rating: s.avg_rating ? Math.round(s.avg_rating * 10) / 10 : 0,
       tags: (s.tags || []).slice(0, 6).join(' · '),
     }));
-  } catch (err) {
-    console.error('Freesound error:', err.message);
-    return null;
-  }
+  } catch (err) { console.error('Freesound error:', err.message); return null; }
 }
 
 // ─── SPOTIFY ─────────────────────────────────────────────
@@ -136,8 +169,7 @@ async function getTrackFeatures(trackName) {
     );
     const keys = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
     return {
-      name: track.name,
-      artist: track.artists[0].name,
+      name: track.name, artist: track.artists[0].name,
       bpm: Math.round(features.data.tempo),
       key: keys[features.data.key] + ' ' + ['Minor','Major'][features.data.mode],
       energy: Math.round(features.data.energy * 100),
@@ -145,10 +177,7 @@ async function getTrackFeatures(trackName) {
       loudness: features.data.loudness.toFixed(1),
       valence: Math.round(features.data.valence * 100),
     };
-  } catch (err) {
-    console.error('Spotify error:', err.message);
-    return null;
-  }
+  } catch (err) { console.error('Spotify error:', err.message); return null; }
 }
 
 async function getArtistStats(artistName) {
@@ -161,27 +190,21 @@ async function getArtistStats(artistName) {
     const tracks = search.data.tracks.items;
     if (!tracks.length) return null;
     const featuresRes = await Promise.all(
-      tracks.map(t => axios.get(
-        `https://api.spotify.com/v1/audio-features/${t.id}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      ))
+      tracks.map(t => axios.get(`https://api.spotify.com/v1/audio-features/${t.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }))
     );
     const features = featuresRes.map(r => r.data);
     const avg = k => Math.round(features.reduce((s, f) => s + f[k], 0) / features.length);
     const keys = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
     return {
       name: artistName,
-      bpm: avg('tempo'),
-      energy: Math.round(avg('energy')),
-      danceability: Math.round(avg('danceability')),
-      valence: Math.round(avg('valence')),
+      bpm: avg('tempo'), energy: Math.round(avg('energy')),
+      danceability: Math.round(avg('danceability')), valence: Math.round(avg('valence')),
       loudness: (features.reduce((s, f) => s + f.loudness, 0) / features.length).toFixed(1),
       key: keys[Math.abs(avg('key')) % 12] + ' ' + ['Minor','Major'][avg('mode') > 0 ? 1 : 0],
     };
-  } catch (err) {
-    console.error('Artist stats error:', err.message);
-    return null;
-  }
+  } catch (err) { console.error('Artist stats error:', err.message); return null; }
 }
 
 // ─── AUDIO ANALYSIS ──────────────────────────────────────
@@ -190,8 +213,7 @@ async function analyzeAudioFile(fileUrl, filename) {
   try {
     const response = await axios.get(fileUrl, {
       headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` },
-      responseType: 'arraybuffer',
-      timeout: 30000,
+      responseType: 'arraybuffer', timeout: 30000,
     });
     fs.writeFileSync(filePath, response.data);
     const result = execSync(`python3 analyze.py "${filePath}"`, { timeout: 60000 }).toString().trim();
@@ -221,12 +243,7 @@ const actions = btns => ({ type: 'actions', elements: btns });
 global.compareSessions = global.compareSessions || {};
 const getCompareSession = id => global.compareSessions[id] || null;
 const startCompareSession = id => {
-  global.compareSessions[id] = {
-    status: 'waiting_your_track',
-    yourTrack: null,
-    referenceTrack: null,
-    startedAt: new Date().toISOString(),
-  };
+  global.compareSessions[id] = { status: 'waiting_your_track', yourTrack: null, referenceTrack: null, startedAt: new Date().toISOString() };
   return global.compareSessions[id];
 };
 const clearCompareSession = id => { delete global.compareSessions[id]; };
@@ -234,18 +251,10 @@ const clearCompareSession = id => { delete global.compareSessions[id]; };
 global.collabSessions = global.collabSessions || {};
 const getCollabSession = id => global.collabSessions[id] || null;
 const startCollabSession = (channelId, trackName, userId) => {
-  global.collabSessions[channelId] = {
-    trackName, startedBy: userId,
-    startedAt: new Date().toISOString(),
-    ideas: [], feedback: [], decisions: [],
-  };
+  global.collabSessions[channelId] = { trackName, startedBy: userId, startedAt: new Date().toISOString(), ideas: [], feedback: [], decisions: [] };
   return global.collabSessions[channelId];
 };
-const endCollabSession = id => {
-  const s = global.collabSessions[id];
-  delete global.collabSessions[id];
-  return s;
-};
+const endCollabSession = id => { const s = global.collabSessions[id]; delete global.collabSessions[id]; return s; };
 
 // ─── WELCOME BLOCKS ───────────────────────────────────────
 function getWelcomeBlocks() {
@@ -285,15 +294,9 @@ async function publishAppHome(client, userId) {
         // Last session card
         ...(lastUpload ? [
           header('📊 Your Last Session'),
-          twoCol(
-            `🎵 *Track*\n${lastUpload.filename}`,
-            `⚡ *Energy*\n${lastUpload.analysis.energy}%`
-          ),
-          twoCol(
-            `🔊 *Bass*\n${lastUpload.analysis.bass_ratio}%`,
-            `🌈 *Brightness*\n${lastUpload.analysis.brightness}`
-          ),
-          context(`_Uploaded ${new Date(lastUpload.timestamp).toLocaleDateString()}_`),
+          twoCol(`🎵 *Track*\n${lastUpload.filename}`, `⚡ *Energy*\n${lastUpload.analysis.energy}%`),
+          twoCol(`🔊 *Bass*\n${lastUpload.analysis.bass_ratio}%`, `🌈 *Brightness*\n${lastUpload.analysis.brightness}`),
+          context(`_Uploaded ${new Date(lastUpload.timestamp).toLocaleDateString()} · Wavmind will remind you in 24hrs_`),
           actions([
             btn('🆚 Compare with Reference', 'quick_compare', 'primary'),
             btn('🎚️ Get Mix Feedback', 'quick_feedback'),
@@ -304,10 +307,7 @@ async function publishAppHome(client, userId) {
         // Weekly stats
         ...(stats && stats.tracks > 0 ? [
           header('📈 Your Week'),
-          twoCol(
-            `🎵 *Tracks Analyzed*\n${stats.tracks}`,
-            `⚠️ *Common Issue*\n${stats.issues[0] || 'None detected'}`
-          ),
+          twoCol(`🎵 *Tracks Analyzed*\n${stats.tracks}`, `⚠️ *Common Issue*\n${stats.issues[0] || 'None detected'}`),
           divider(),
         ] : []),
 
@@ -315,50 +315,50 @@ async function publishAppHome(client, userId) {
         header('🔬 Analyze'),
         twoCol(
           '*🆚 Audio Comparison*\nUpload your track + reference → gap report with AI fix recommendations\n\n`/wavmind mix compare start`',
-          '*🔍 Reference Track*\nReal Spotify audio data + full production blueprint for any song\n\n`/wavmind reference [track]`'
+          '*🔍 Reference Track*\nReal Spotify audio data + full production blueprint\n\n`/wavmind reference [track]`'
         ),
         divider(),
 
         // CREATE
         header('🎹 Create'),
         twoCol(
-          '*🎹 DAW Knowledge*\nStep-by-step tutorials powered by Tavily + Groq AI\n\n`/wavmind daw [daw] [question]`',
-          '*🎵 Free Samples*\n500,000+ Creative Commons sounds from Freesound.org\n\n`/wavmind samples [keywords]`'
+          '*🎹 DAW Knowledge*\nStep-by-step tutorials via Tavily + Groq AI\n\n`/wavmind daw [daw] [question]`',
+          '*🎵 Free Samples*\n500,000+ Creative Commons sounds\n\n`/wavmind samples [keywords]`'
         ),
         twoCol(
-          '*🎚️ Mix Feedback*\nDescribe your mix or upload audio for professional AI advice\n\n`/wavmind feedback [describe]`',
-          '*🎛️ Production Tools*\nTrack ideas · BPM & key · Chord progressions · Tips\n\n`/wavmind ideas` · `/wavmind bpm` · `/wavmind chords`'
+          '*🎚️ Mix Feedback*\nProfessional AI mixing advice\n\n`/wavmind feedback [describe]`',
+          '*🎛️ Production Tools*\nIdeas · BPM · Chords · Tips\n\n`/wavmind ideas` · `/wavmind bpm`'
         ),
         divider(),
 
         // DEVELOP
         header('📈 Develop'),
         twoCol(
-          '*🎤 Artist DNA*\nCompare two artists using real Spotify production data\n\n`/wavmind compare [artist1] and [artist2]`',
-          '*🎯 A&R Evaluation*\nHonest label executive assessment of your track\n\n`/wavmind ar [describe track]`'
+          '*🎤 Artist DNA*\nCompare artists with real Spotify data\n\n`/wavmind compare [artist1] and [artist2]`',
+          '*🎯 A&R Evaluation*\nLabel exec assessment of your track\n\n`/wavmind ar [describe track]`'
         ),
         divider(),
 
         // COLLABORATE
         header('🤝 Collaborate'),
-        section('*🤝 Collab Mode* — Track everything your team discusses\n\n`/wavmind collab start "Track Name"` — Start\n`/wavmind collab idea [idea]` — Log idea\n`/wavmind collab feedback [fb]` — Log feedback\n`/wavmind collab decision [dec]` — Log decision\n`/wavmind collab summary` — AI summary\n`/wavmind collab end` — End session'),
+        section('*🤝 Collab Mode*\n\n`/wavmind collab start "Track Name"` — Start\n`/wavmind collab idea [idea]` — Log idea\n`/wavmind collab feedback [fb]` — Log feedback\n`/wavmind collab decision [dec]` — Log decision\n`/wavmind collab summary` — AI summary\n`/wavmind collab end` — End session'),
+        divider(),
+
+        // AUTONOMOUS FEATURES
+        header('🤖 Autonomous Features'),
+        section('Wavmind acts without you asking:\n\n• *24hr Reminder* — Uploads a track? Wavmind DMs you the next day with your pending issues\n• *Weekly Report* — Every Monday Wavmind sends your production summary\n• *Channel Monitor* — Wavmind listens for music topics and jumps in with tips\n• *MCP Server* — Any AI agent can connect to Wavmind\'s tools'),
         divider(),
 
         // AUDIO WORKFLOW
         header('🎛️ Audio Upload Workflow'),
-        section('*Quick analysis:*\n① Upload MP3/WAV → Wavmind scans automatically\n② `/wavmind mixfeedback bpm:85 key:F_minor` for deep feedback\n\n*Compare with reference:*\n① `/wavmind mix compare start`\n② Upload your track → Upload reference track\n③ Get instant gap report + AI recommendations'),
+        section('*Quick analysis:*\n① Upload MP3/WAV → auto scan\n② `/wavmind mixfeedback bpm:85 key:F_minor`\n\n*Compare with reference:*\n① `/wavmind mix compare start`\n② Upload your track → Upload reference\n③ Get gap report + AI recommendations'),
         context('💡 Key format: `C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major`'),
-        divider(),
-
-        // DAW EXAMPLES
-        header('🎹 DAW Examples'),
-        section('`/wavmind daw fl studio how to sidechain 808`\n`/wavmind daw ableton how to warp audio`\n`/wavmind daw logic pro how to use flex pitch`\n`/wavmind daw pro tools how to set up sessions`\n`/wavmind daw cubase how to use chord track`'),
-        context('FL Studio · Ableton Live · Logic Pro · Pro Tools · Cubase · Studio One · GarageBand · Reaper · Bitwig'),
         divider(),
 
         // MCP
         header('🔌 MCP Server'),
-        section('Wavmind exposes all tools via MCP — any AI agent can connect:\n\n• `search_samples` — Freesound 500K+ samples\n• `get_track_features` — Spotify audio data\n• `analyze_mix` — AI mixing feedback\n• `get_daw_help` — DAW tutorials\n• `compare_artists` — Artist DNA\n• `get_track_ideas` — Track concepts'),
+        section('• `search_samples` — Freesound\n• `get_track_features` — Spotify\n• `analyze_mix` — AI feedback\n• `get_daw_help` — DAW tutorials\n• `compare_artists` — Artist DNA\n• `get_track_ideas` — Track concepts'),
+        context(`🔗 ${process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : 'your-url.railway.app'}/health`),
         divider(),
 
         // POWERED BY
@@ -367,7 +367,7 @@ async function publishAppHome(client, userId) {
         twoCol('🔍 *Tavily* — Real-time search', '🎵 *Freesound* — 500K+ samples'),
         twoCol('🎧 *Librosa* — Audio analysis', '🔌 *MCP* — AI agent protocol'),
         divider(),
-        context('🎛️ *Wavmind* — Type `/wavmind` to get started'),
+        context('🎛️ *Wavmind* — Autonomous AI for music producers · Type `/wavmind` to get started'),
       ],
     },
   });
@@ -385,7 +385,7 @@ app.action('quick_compare', async ({ body, ack, client }) => {
     channel: body.user.id,
     blocks: [
       header('🆚 Comparison Started!'),
-      section('Upload your track first, then your reference track.\nWavmind will compare both automatically.'),
+      section('Upload your track first, then your reference track.\nWavmind compares both automatically.'),
       context('Cancel: `/wavmind mix compare cancel`'),
     ],
   });
@@ -419,7 +419,7 @@ app.message(async ({ message, say }) => {
     const shouldRespond = Math.random() < 0.33;
     if (!shouldRespond) return;
     try {
-      const response = await askAI(`A music producer said: "${message.text}". Give a brief 2-sentence helpful tip. End with one relevant Wavmind command. Be natural and conversational.`);
+      const response = await askAI(`A music producer said: "${message.text}". Give a brief 2-sentence helpful tip. End with one relevant Wavmind command. Be natural.`);
       if (response) {
         await say({
           thread_ts: message.ts,
@@ -457,13 +457,7 @@ app.event('file_shared', async ({ event, client }) => {
           await client.chat.postMessage({ channel: channelId, blocks: [header('❗ Scan Failed'), section('Try MP3 under 10MB.')] });
           return;
         }
-        compareSession.yourTrack = {
-          filename: file.name,
-          energy: analysis.energy,
-          brightness: analysis.brightness,
-          bass_ratio: analysis.bass_ratio,
-          duration: analysis.duration,
-        };
+        compareSession.yourTrack = { filename: file.name, energy: analysis.energy, brightness: analysis.brightness, bass_ratio: analysis.bass_ratio, duration: analysis.duration };
         compareSession.status = 'waiting_reference';
         const mins = Math.floor(analysis.duration / 60);
         const secs = String(analysis.duration % 60).padStart(2, '0');
@@ -492,13 +486,7 @@ app.event('file_shared', async ({ event, client }) => {
           await client.chat.postMessage({ channel: channelId, blocks: [header('❗ Scan Failed'), section('Try MP3 under 10MB.')] });
           return;
         }
-        compareSession.referenceTrack = {
-          filename: file.name,
-          energy: analysis.energy,
-          brightness: analysis.brightness,
-          bass_ratio: analysis.bass_ratio,
-          duration: analysis.duration,
-        };
+        compareSession.referenceTrack = { filename: file.name, energy: analysis.energy, brightness: analysis.brightness, bass_ratio: analysis.bass_ratio, duration: analysis.duration };
         const yours = compareSession.yourTrack;
         const ref = compareSession.referenceTrack;
         const energyDiff = ref.energy - yours.energy;
@@ -515,7 +503,7 @@ REFERENCE "${ref.filename}": Energy ${ref.energy}%, Brightness ${ref.brightness}
 Energy gap: ${Math.abs(energyDiff)}% ${energyDiff > 0 ? '(ref higher)' : '(yours higher)'}
 Bass gap: ${Math.abs(bassDiff)}% ${bassDiff > 0 ? '(ref heavier)' : '(yours heavier)'}
 Brightness: ${brightDiff > 0 ? 'Ref brighter' : brightDiff < 0 ? 'Yours brighter' : 'Matched'}
-Give specific EQ, compression, bass advice to close each gap. Top 3 most important changes. Real plugin names.`);
+Specific EQ, compression, bass advice to close each gap. Top 3 changes first. Real plugin names.`);
         clearCompareSession(userId);
         await client.chat.postMessage({
           channel: channelId,
@@ -533,7 +521,7 @@ Give specific EQ, compression, bass advice to close each gap. Top 3 most importa
             header('🤖 AI Gap Analysis & Fix Recommendations'),
             section(aiAnalysis || 'Could not generate analysis.'),
             divider(),
-            section('*Next Steps:*\n• Apply the recommended changes above\n• Re-export your track\n• Run `/wavmind mix compare start` again to check progress'),
+            section('*Next Steps:*\n• Apply the recommended changes\n• Re-export your track\n• Run `/wavmind mix compare start` again to check progress'),
             context('`/wavmind mix compare start` to run again'),
           ],
         });
@@ -555,16 +543,11 @@ Give specific EQ, compression, bass advice to close each gap. Top 3 most importa
       return;
     }
 
+    // Track upload — saves reminder to disk
     if (userId) trackUpload(userId, file.name, analysis);
 
     global.pendingAnalysis = global.pendingAnalysis || {};
-    global.pendingAnalysis[channelId] = {
-      filename: file.name,
-      energy: analysis.energy,
-      brightness: analysis.brightness,
-      bass_ratio: analysis.bass_ratio,
-      duration: analysis.duration,
-    };
+    global.pendingAnalysis[channelId] = { filename: file.name, energy: analysis.energy, brightness: analysis.brightness, bass_ratio: analysis.bass_ratio, duration: analysis.duration };
 
     const mins = Math.floor(analysis.duration / 60);
     const secs = String(analysis.duration % 60).padStart(2, '0');
@@ -584,48 +567,71 @@ Give specific EQ, compression, bass advice to close each gap. Top 3 most importa
         ...(issues.length > 0 ? [divider(), section(`*⚡ Quick Insights:*\n${issues.join('\n')}`)] : []),
         divider(),
         section('*What would you like to do?*\n\n• Deep feedback: `/wavmind mixfeedback bpm:85 key:F_minor`\n• Compare with reference: `/wavmind mix compare start`'),
-        context('💡 Wavmind will send you a reminder DM in 24 hours'),
+        context('🤖 Wavmind will automatically DM you in 24 hours to check your progress'),
       ],
     });
 
-    // ─── 24HR REMINDER ───────────────────────────────────
+    // Update home tab
     if (userId) {
-      setTimeout(async () => {
-        try {
-          const uploads = global.userUploads[userId] || [];
-          const thisUpload = uploads.find(u => u.filename === file.name && !u.reminderSent);
-          if (!thisUpload) return;
-          thisUpload.reminderSent = true;
-          const pendingIssues = [];
-          if (thisUpload.analysis.energy < 50) pendingIssues.push('☐ Low energy — needs more punch');
-          if (thisUpload.analysis.bass_ratio > 65) pendingIssues.push('☐ Heavy bass — check on small speakers');
-          if (thisUpload.analysis.bass_ratio < 20) pendingIssues.push('☐ Thin bass — add more low end');
-          await client.chat.postMessage({
-            channel: userId,
-            blocks: [
-              header('🎛️ Wavmind Reminder'),
-              section(`Hey! You uploaded *"${file.name}"* yesterday.\n\nHave you fixed these issues yet?`),
-              divider(),
-              ...(pendingIssues.length > 0 ? [
-                section(`*Pending fixes:*\n${pendingIssues.join('\n')}`),
-              ] : [
-                section('Your track looked good! Ready to release?'),
-              ]),
-              divider(),
-              section('*Check your progress:*\n`/wavmind mix compare start` — Compare with reference\n`/wavmind mixfeedback bpm:140 key:F_minor` — Fresh feedback'),
-              context('🤖 Autonomous reminder from Wavmind'),
-            ],
-          });
-          await publishAppHome(client, userId);
-        } catch (err) { console.error('Reminder error:', err.message); }
-      }, 24 * 60 * 60 * 1000);
+      try { await publishAppHome(client, userId); } catch (e) { console.error('Home error:', e.message); }
     }
 
   } catch (err) { console.error('File error:', err.message); }
 });
 
-// ─── WEEKLY DIGEST ────────────────────────────────────────
-function scheduleWeeklyDigest(client) {
+// ─── SCHEDULER: REMINDERS + WEEKLY DIGEST ────────────────
+function startScheduler(client) {
+
+  // ─── REMINDER CHECKER (every 5 minutes) ──────────────
+  const checkReminders = async () => {
+    try {
+      const now = new Date();
+      let changed = false;
+      for (const userId of Object.keys(global.pendingReminders)) {
+        for (const reminder of global.pendingReminders[userId]) {
+          if (reminder.sent) continue;
+          if (new Date(reminder.remindAt) > now) continue;
+
+          reminder.sent = true;
+          changed = true;
+
+          const issues = [];
+          if (reminder.analysis.energy < 50) issues.push('☐ Low energy — needs more punch');
+          if (reminder.analysis.bass_ratio > 65) issues.push('☐ Heavy bass — check on small speakers');
+          if (reminder.analysis.bass_ratio < 20) issues.push('☐ Thin bass — add more low end');
+
+          console.log(`📬 Sending reminder to ${userId} for "${reminder.filename}"`);
+
+          await client.chat.postMessage({
+            channel: userId,
+            blocks: [
+              header('🎛️ Wavmind Reminder'),
+              section(`Hey! You uploaded *"${reminder.filename}"* yesterday.\n\nHave you worked on it since?`),
+              divider(),
+              ...(issues.length > 0 ? [
+                section(`*Issues detected:*\n${issues.join('\n')}`),
+              ] : [
+                section('✅ Your track scanned clean. Ready to release?'),
+              ]),
+              divider(),
+              section('*Check your progress:*\n`/wavmind mix compare start` — Compare with reference\n`/wavmind mixfeedback bpm:140 key:F_minor` — Fresh AI feedback\n`/wavmind ar [description]` — A&R evaluation'),
+              context('🤖 Autonomous reminder from Wavmind · Fires automatically 24hrs after upload'),
+            ],
+          });
+
+          try { await publishAppHome(client, userId); } catch (e) {}
+        }
+      }
+      if (changed) saveReminders(global.pendingReminders);
+    } catch (err) { console.error('Reminder check error:', err.message); }
+  };
+
+  // Run immediately on startup then every 5 minutes
+  checkReminders();
+  setInterval(checkReminders, 5 * 60 * 1000);
+  console.log('⏰ Reminder checker started — runs every 5 minutes');
+
+  // ─── WEEKLY DIGEST (every Monday 9am) ────────────────
   const sendDigest = async () => {
     try {
       for (const userId of Object.keys(global.weeklyStats)) {
@@ -633,10 +639,9 @@ function scheduleWeeklyDigest(client) {
         if (!stats || stats.tracks === 0) continue;
         const topIssue = stats.issues.length > 0
           ? stats.issues.sort((a, b) =>
-              stats.issues.filter(i => i === b).length - stats.issues.filter(i => i === a).length
-            )[0]
+              stats.issues.filter(i => i === b).length - stats.issues.filter(i => i === a).length)[0]
           : 'None detected';
-        const tip = await askAI(`Music producer analyzed ${stats.tracks} tracks this week. Most common issue: ${topIssue}. Give one specific actionable tip for next week. Under 50 words.`);
+        const tip = await askAI(`Music producer analyzed ${stats.tracks} tracks this week. Common issue: ${topIssue}. One specific actionable tip for next week. Under 50 words.`);
         await client.chat.postMessage({
           channel: userId,
           blocks: [
@@ -647,13 +652,14 @@ function scheduleWeeklyDigest(client) {
             divider(),
             section(`*🤖 Wavmind Recommendation:*\n${tip || 'Keep producing consistently!'}`),
             divider(),
-            section('*This week try:*\n`/wavmind mix compare start` — Compare your mix\n`/wavmind daw [daw] [question]` — Learn something new\n`/wavmind samples drums` — Find fresh sounds'),
-            context('📊 Automated weekly report from Wavmind · Every Monday 9am'),
+            section('*This week try:*\n`/wavmind mix compare start` — Compare your mix\n`/wavmind daw [daw] [question]` — Learn a new technique\n`/wavmind samples drums` — Find fresh sounds'),
+            context('📊 Automated weekly report · Every Monday 9am · Wavmind'),
           ],
         });
         global.weeklyStats[userId] = { tracks: 0, issues: [] };
+        saveStats(global.weeklyStats);
       }
-    } catch (err) { console.error('Weekly digest error:', err.message); }
+    } catch (err) { console.error('Digest error:', err.message); }
   };
 
   const now = new Date();
@@ -691,72 +697,43 @@ function startMCPServer() {
       try {
         if (req.url === '/health') {
           res.writeHead(200);
-          res.end(JSON.stringify({
-            status: 'ok',
-            service: 'Wavmind AI Producer Agent',
-            version: '1.0.0',
-            tools: mcpTools.map(t => t.name),
-          }));
+          res.end(JSON.stringify({ status: 'ok', service: 'Wavmind AI Producer Agent', version: '1.0.0', tools: mcpTools.map(t => t.name) }));
           return;
         }
-
         if (req.url === '/mcp') {
           res.writeHead(200);
-          res.end(JSON.stringify({
-            name: 'wavmind',
-            version: '1.0.0',
-            description: 'AI tools for music producers',
-            tools: mcpTools,
-          }));
+          res.end(JSON.stringify({ name: 'wavmind', version: '1.0.0', description: 'AI tools for music producers', tools: mcpTools }));
           return;
         }
-
         if (req.url === '/mcp/tools') {
           res.writeHead(200);
           res.end(JSON.stringify({ tools: mcpTools }));
           return;
         }
-
         if (req.method === 'POST' && req.url === '/mcp/execute') {
           const { tool, arguments: args } = JSON.parse(body);
           let result;
           switch (tool) {
-            case 'search_samples':
-              result = await searchFreesound(args.query);
-              break;
-            case 'get_track_features':
-              result = await getTrackFeatures(args.track_name);
-              break;
-            case 'analyze_mix':
-              result = await askAI(`Professional mix feedback for: ${args.description}. BPM: ${args.bpm || '?'}, Key: ${args.key || '?'}.`);
-              break;
+            case 'search_samples': result = await searchFreesound(args.query); break;
+            case 'get_track_features': result = await getTrackFeatures(args.track_name); break;
+            case 'analyze_mix': result = await askAI(`Professional mix feedback: ${args.description}. BPM: ${args.bpm || '?'}, Key: ${args.key || '?'}.`); break;
             case 'get_daw_help': {
-              const [tav, ai] = await Promise.all([
-                tavilySearch(`${args.daw} ${args.question} tutorial`),
-                askAI(`${args.daw} step-by-step tutorial: "${args.question}"`),
-              ]);
+              const [tav, ai] = await Promise.all([tavilySearch(`${args.daw} ${args.question} tutorial`), askAI(`${args.daw} tutorial: "${args.question}"`)]);
               result = { ai_answer: ai, web_answer: tav?.answer, sources: tav?.results };
               break;
             }
             case 'compare_artists': {
-              const [s1, s2] = await Promise.all([
-                getArtistStats(args.artist1),
-                getArtistStats(args.artist2),
-              ]);
+              const [s1, s2] = await Promise.all([getArtistStats(args.artist1), getArtistStats(args.artist2)]);
               result = { artist1: s1, artist2: s2 };
               break;
             }
-            case 'get_track_ideas':
-              result = await askAI(`5 creative track ideas for "${args.genre}". Format: 🎵 Title — concept.`);
-              break;
-            default:
-              result = { error: `Unknown tool: ${tool}` };
+            case 'get_track_ideas': result = await askAI(`5 track ideas for "${args.genre}". Format: 🎵 Title — concept.`); break;
+            default: result = { error: `Unknown tool: ${tool}` };
           }
           res.writeHead(200);
           res.end(JSON.stringify({ tool, result }));
           return;
         }
-
         res.writeHead(404);
         res.end(JSON.stringify({ error: 'Not found' }));
       } catch (err) {
@@ -768,7 +745,7 @@ function startMCPServer() {
 
   const port = process.env.PORT || 8000;
   server.listen(port, () => {
-    console.log(`🔌 Wavmind MCP Server running on port ${port}`);
+    console.log(`🔌 MCP Server on port ${port}`);
     console.log(`📋 Tools: ${mcpTools.map(t => t.name).join(', ')}`);
   });
 }
@@ -791,9 +768,9 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
     await respond({
       blocks: [
         header('🔌 Wavmind MCP Server'),
-        section('Connect any AI agent to Wavmind\'s music production tools.'),
+        section('Connect any AI agent to Wavmind\'s tools.'),
         divider(),
-        section('*Tools:*\n• `search_samples` — Freesound 500K+ samples\n• `get_track_features` — Spotify audio data\n• `analyze_mix` — AI mixing feedback\n• `get_daw_help` — DAW tutorials\n• `compare_artists` — Artist DNA\n• `get_track_ideas` — Track concepts'),
+        section('*Tools:*\n• `search_samples` — Freesound 500K+\n• `get_track_features` — Spotify data\n• `analyze_mix` — AI feedback\n• `get_daw_help` — DAW tutorials\n• `compare_artists` — Artist DNA\n• `get_track_ideas` — Track concepts'),
         divider(),
         section(`*Endpoints:*\n• \`GET ${base}/health\`\n• \`GET ${base}/mcp/tools\`\n• \`POST ${base}/mcp/execute\``),
         context('🔌 Compatible with Claude, GPT and any MCP client'),
@@ -869,7 +846,7 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
       if (detectedDAW) break;
     }
     if (!detectedDAW) {
-      await respond({ blocks: [header('❗ DAW Not Recognized'), section('`/wavmind daw fl studio how to sidechain`'), context('Supported: FL Studio · Ableton · Logic Pro · Pro Tools · Cubase · Studio One')] });
+      await respond({ blocks: [header('❗ DAW Not Recognized'), section('`/wavmind daw fl studio how to sidechain`'), context('FL Studio · Ableton · Logic Pro · Pro Tools · Cubase · Studio One')] });
       return;
     }
     await respond({ blocks: [header(`🎹 ${detectedDAW}...`), section(`*Q:* ${question}`), context('⏳ Tavily + AI...')] });
@@ -903,14 +880,14 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
           blocks.push(section(`*${i+1}. ${s.name}*\n⏱️ ${s.duration}s · ⭐ ${s.rating}/5 · 📄 ${s.license}\n👤 ${s.username}\n${s.preview ? `🔊 *<${s.preview}|▶ Listen>*  ` : ''}🔗 *<${s.url}|📥 Download>*`));
           if (i < retry.length - 1) blocks.push(divider());
         });
-        blocks.push(context('🎵 Powered by Freesound.org'));
+        blocks.push(context('🎵 Freesound.org'));
         await respond({ blocks });
       } else {
         await respond({ blocks: [header('❗ No Results'), section(`Try simpler: \`/wavmind samples drums\``), section(`🔗 *<https://freesound.org/search/?q=${encodeURIComponent(query)}|Browse Freesound>*`)] });
       }
       return;
     }
-    const aiTip = await askAI(`Producer found "${query}" samples: ${sounds.slice(0,3).map(s=>s.name).join(', ')}. 2-3 production tips. Under 60 words. Bullets.`);
+    const aiTip = await askAI(`Producer found "${query}" samples: ${sounds.slice(0,3).map(s=>s.name).join(', ')}. 2-3 tips. Under 60 words. Bullets.`);
     const blocks = [header(`🎵 Samples: "${query}"`), section(`*${sounds.length} sounds* — all free`), context('Click Listen to preview · Click Download for file'), divider()];
     sounds.forEach((s, i) => {
       blocks.push(section(`*${i+1}. ${s.name}*\n⏱️ *${s.duration}s* · ⭐ *${s.rating}/5* · 📥 *${s.downloads.toLocaleString()}*\n📄 ${s.license} · 👤 ${s.username}\n🏷️ ${s.tags}\n\n${s.preview ? `🔊 *<${s.preview}|▶ Listen>*     ` : ''}🔗 *<${s.url}|📥 Download>*`));
@@ -944,8 +921,7 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
       return;
     }
     if (subL.startsWith('idea')) {
-      const t = sub.slice(4).trim();
-      const s = getCollabSession(command.channel_id);
+      const t = sub.slice(4).trim(); const s = getCollabSession(command.channel_id);
       if (!s) { await respond({ blocks: [header('❗ No Session'), section('`/wavmind collab start "Name"`')] }); return; }
       if (!t) { await respond({ blocks: [header('❗ Missing'), section('`/wavmind collab idea [idea]`')] }); return; }
       s.ideas.push({ text: t, user: userId, time: new Date().toISOString() });
@@ -953,8 +929,7 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
       return;
     }
     if (subL.startsWith('feedback')) {
-      const t = sub.slice(8).trim();
-      const s = getCollabSession(command.channel_id);
+      const t = sub.slice(8).trim(); const s = getCollabSession(command.channel_id);
       if (!s) { await respond({ blocks: [header('❗ No Session'), section('`/wavmind collab start "Name"`')] }); return; }
       if (!t) { await respond({ blocks: [header('❗ Missing'), section('`/wavmind collab feedback [fb]`')] }); return; }
       s.feedback.push({ text: t, user: userId, time: new Date().toISOString() });
@@ -962,8 +937,7 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
       return;
     }
     if (subL.startsWith('decision')) {
-      const t = sub.slice(8).trim();
-      const s = getCollabSession(command.channel_id);
+      const t = sub.slice(8).trim(); const s = getCollabSession(command.channel_id);
       if (!s) { await respond({ blocks: [header('❗ No Session'), section('`/wavmind collab start "Name"`')] }); return; }
       if (!t) { await respond({ blocks: [header('❗ Missing'), section('`/wavmind collab decision [dec]`')] }); return; }
       s.decisions.push({ text: t, user: userId, time: new Date().toISOString() });
@@ -980,7 +954,7 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
       const s = getCollabSession(command.channel_id);
       if (!s) { await respond({ blocks: [header('❗ No Session')] }); return; }
       await respond({ blocks: [header('📋 Generating...'), context('⏳')] });
-      const r = await askAI(`Summarize collab for "${s.trackName}": IDEAS: ${s.ideas.map(i=>i.text).join(', ')||'None'} FEEDBACK: ${s.feedback.map(f=>f.text).join(', ')||'None'} DECISIONS: ${s.decisions.map(d=>d.text).join(', ')||'None'}. Overview, directions, next steps. Format with emojis.`);
+      const r = await askAI(`Summarize collab for "${s.trackName}": IDEAS: ${s.ideas.map(i=>i.text).join(', ')||'None'} FEEDBACK: ${s.feedback.map(f=>f.text).join(', ')||'None'} DECISIONS: ${s.decisions.map(d=>d.text).join(', ')||'None'}. Overview, directions, next steps.`);
       await respond({ response_type: 'in_channel', blocks: [header('📋 Summary'), section(`*"${s.trackName}"*`), divider(), twoCol(`💡 ${s.ideas.length}`, `🎚️ ${s.feedback.length}`), twoCol(`✅ ${s.decisions.length}`, `⏱️ ${new Date(s.startedAt).toLocaleTimeString()}`), divider(), section(r || 'Error'), context('`/wavmind collab end` to finish')] });
       return;
     }
@@ -1007,7 +981,7 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
     else { const w = artists.split(' '); const m = Math.ceil(w.length/2); a1 = w.slice(0,m).join(' '); a2 = w.slice(m).join(' '); }
     const [s1, s2] = await Promise.all([getArtistStats(a1), getArtistStats(a2)]);
     if (!s1 || !s2) { await respond({ blocks: [header('❗ Not Found'), section('`/wavmind compare Drake and Travis Scott`')] }); return; }
-    const ai = await askAI(`Compare: ${s1.name} (BPM ${s1.bpm}, Energy ${s1.energy}%, Key ${s1.key}) vs ${s2.name} (BPM ${s2.bpm}, Energy ${s2.energy}%, Key ${s2.key}). Key differences, how to blend styles.`);
+    const ai = await askAI(`Compare: ${s1.name} (BPM ${s1.bpm}, Energy ${s1.energy}%, Key ${s1.key}) vs ${s2.name} (BPM ${s2.bpm}, Energy ${s2.energy}%, Key ${s2.key}). Key differences, how to blend.`);
     await respond({
       blocks: [
         header('🎤 Artist DNA'),
@@ -1158,5 +1132,5 @@ app.event('app_mention', async ({ event, say }) => {
   await app.start();
   console.log('🎛️ Wavmind Agent is running!');
   startMCPServer();
-  scheduleWeeklyDigest(app.client);
+  startScheduler(app.client);
 })();
