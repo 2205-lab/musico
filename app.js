@@ -759,6 +759,10 @@ app.message(async ({ message, say }) => {
 
 // ─── START ────────────────────────────────────────────────
 (async () => {
+  // Start Slack bot
   await app.start();
-  console.log('🎛️ Wavmind is running!');
+  console.log('🎛️ Wavmind Slack Agent is running!');
+
+  // Start MCP server alongside
+  require('./mcp-server');
 })();
