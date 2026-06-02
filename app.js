@@ -901,7 +901,7 @@ function startMCPServer() {
     });
   });
 
-  const port = process.env.MCP_PORT || 3001;
+  const port = process.env.MCP_PORT || 8000;
   server.listen(port, () => console.log(`🔌 MCP Server on port ${port}`));
 }
 
