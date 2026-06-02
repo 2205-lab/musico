@@ -44,7 +44,16 @@ async function askAI(prompt) {
 // ─── FREESOUND ────────────────────────────────────────────
 async function searchFreesound(query) {
   try {
-    const url = `https://freesound.org/apiv2/search/text/?query=${encodeURIComponent(query)}&token=${process.env.FREESOUND_API_KEY}&format=json&page_size=5&fields=id,name,tags,duration,license,username,previews,avg_rating,num_downloads`;
+    const cleanQuery = query
+      .replace(/\b(loop|loops|sample|samples|pack)\b/gi, '')
+      .replace(/\b(\d+bpm|bpm)\b/gi, '')
+      .trim()
+      .split(' ')
+      .slice(0, 3)
+      .join(' ');
+
+    const searchQuery = encodeURIComponent(cleanQuery || query);
+    const url = `https://freesound.org/apiv2/search/text/?query=${searchQuery}&token=${process.env.FREESOUND_API_KEY}&format=json&page_size=5&fields=id,name,tags,duration,license,username,previews,avg_rating,num_downloads&filter=duration:[1+TO+30]`;
     const res = await axios.get(url, { timeout: 10000 });
     const sounds = res.data.results || [];
     if (!sounds.length) return null;
@@ -52,13 +61,15 @@ async function searchFreesound(query) {
       id: s.id,
       name: s.name,
       duration: s.duration ? Math.round(s.duration * 10) / 10 : 0,
-      license: s.license?.includes('publicdomain') ? 'CC0 (Free to use)' : s.license?.includes('Attribution') ? 'CC Attribution' : 'Creative Commons',
+      license: s.license?.includes('publicdomain') ? 'CC0 — No attribution needed' :
+               s.license?.includes('by/3.0') || s.license?.includes('by/4.0') ? 'CC Attribution — Credit required' :
+               'Creative Commons',
       username: s.username,
       preview: s.previews?.['preview-hq-mp3'] || s.previews?.['preview-lq-mp3'] || null,
       url: `https://freesound.org/people/${s.username}/sounds/${s.id}/`,
       downloads: s.num_downloads || 0,
       rating: s.avg_rating ? Math.round(s.avg_rating * 10) / 10 : 0,
-      tags: (s.tags || []).slice(0, 6).join(', '),
+      tags: (s.tags || []).slice(0, 8).join(' · '),
     }));
   } catch (err) {
     console.error('Freesound error:', err.message);
@@ -216,16 +227,14 @@ function getWelcomeBlocks() {
     section('*🎚️ Mixing Feedback*\n`/wavmind feedback [describe your mix]`\n_Example: `/wavmind feedback my beat feels muddy at 140bpm`_'),
     section('*🔍 Reference Track Analysis*\n`/wavmind reference [track - artist]`\n_Pulls real Spotify data and gives you a sound blueprint_\n_Example: `/wavmind reference Blinding Lights - The Weeknd`_'),
     section('*🎤 Artist Comparison*\n`/wavmind compare [artist1] and [artist2]`\n_Compare production styles using real Spotify data_\n_Example: `/wavmind compare Drake and Travis Scott`_'),
-    section('*🎵 Free Samples*\n`/wavmind samples [description]`\n_Search 500,000+ free Creative Commons samples_\n_Example: `/wavmind samples dark trap drums`_'),
-    section('*📰 Trending News*\n`/wavmind trending [topic]`\n_Real-time music industry news and AI insights_\n_Example: `/wavmind trending trap beats`_'),
+    section('*🎵 Free Samples*\n`/wavmind samples [keywords]`\n_Search 500,000+ free Creative Commons samples_\n_Example: `/wavmind samples drums` · `/wavmind samples piano` · `/wavmind samples bass`_'),
+    section('*📰 Trending News*\n`/wavmind trending [topic]`\n_Real-time music industry news and AI insights_\n_Example: `/wavmind trending plugins`_'),
     section('*🥁 BPM & Key Suggestions*\n`/wavmind bpm [mood or genre]`\n_Example: `/wavmind bpm dark cinematic hip hop`_'),
     section('*🎹 Chord Progressions*\n`/wavmind chords [key + genre]`\n_Example: `/wavmind chords F minor trap`_'),
     section('*💡 Production Tips*\n`/wavmind tips [topic]`\n_Example: `/wavmind tips 808 mixing`_'),
     section('*🎯 A&R Simulation*\n`/wavmind ar [describe your track]`\n_Label executive evaluation of commercial potential_\n_Example: `/wavmind ar dark trap 140bpm heavy 808s`_'),
-    section('*✅ Release Readiness*\n`/wavmind release [describe your track]`\n_Pre-release checklist for mix, metadata and distribution_'),
-    section('*💰 Beat Marketplace*\n`/wavmind marketplace [genre + BPM + key]`\n_BeatStars tags, SEO titles, YouTube descriptions_'),
-    section('*🚀 Career Path*\n`/wavmind career`\n_Discover your ideal music industry career path_'),
-    section('*📅 Production Sprint*\n`/wavmind sprint [goal]`\n_Weekly production plan with tasks and milestones_'),
+    section('*✅ Release Readiness*\n`/wavmind release [describe your track]`\n_Pre-release checklist for mix, metadata and distribution_\n_Example: `/wavmind release trap beat 140bpm mixed and mastered`_'),
+    section('*💰 Beat Marketplace*\n`/wavmind marketplace [genre + BPM + key]`\n_BeatStars tags, SEO titles, YouTube descriptions_\n_Example: `/wavmind marketplace dark trap 140bpm F minor`_'),
     section('*🤝 Collab Mode*\n`/wavmind collab start "Track Name"` — Start a session\n`/wavmind collab idea [idea]` — Log an idea\n`/wavmind collab feedback [feedback]` — Log feedback\n`/wavmind collab decision [decision]` — Log a decision\n`/wavmind collab summary` — Get AI summary\n`/wavmind collab end` — End session'),
     divider(),
     section('*🎛️ Audio File Analysis + Mix Feedback*\n*Step 1:* Upload any MP3 or WAV file directly in Slack\n*Step 2:* Wavmind scans energy, brightness and bass\n*Step 3:* Tell me your BPM and Key from your DAW\n*Step 4:* Get professional AI mixing feedback\n\n`/wavmind mixfeedback bpm:85 key:F_minor`\n_Key format: `C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major`_'),
@@ -251,14 +260,13 @@ app.event('app_home_opened', async ({ event, client }) => {
           { type: 'section', fields: [{ type: 'mrkdwn', text: '🎹 *Chord Progressions*\nMusic theory-based chord ideas for any key and genre' }, { type: 'mrkdwn', text: '🥁 *BPM & Key*\nIdeal tempo and key suggestions for any mood' }] },
           { type: 'section', fields: [{ type: 'mrkdwn', text: '💡 *Production Tips*\nExpert tips on any music production topic' }, { type: 'mrkdwn', text: '🎛️ *Audio Analysis*\nUpload MP3/WAV — Wavmind scans energy, brightness and bass' }] },
           { type: 'section', fields: [{ type: 'mrkdwn', text: '🎯 *A&R Simulation*\nLabel exec evaluation of your track\'s commercial potential' }, { type: 'mrkdwn', text: '✅ *Release Readiness*\nPre-release checklist for mix, metadata and distribution' }] },
-          { type: 'section', fields: [{ type: 'mrkdwn', text: '💰 *Beat Marketplace*\nBeatStars SEO, tags and monetization strategy' }, { type: 'mrkdwn', text: '🚀 *Career Path*\nPersonalized music industry career roadmap' }] },
-          { type: 'section', fields: [{ type: 'mrkdwn', text: '📅 *Sprint Planner*\nWeekly production goals and day-by-day tasks' }, { type: 'mrkdwn', text: '🤝 *Collab Mode*\nTeam session tracking with AI summaries' }] },
+          { type: 'section', fields: [{ type: 'mrkdwn', text: '💰 *Beat Marketplace*\nBeatStars SEO, tags and monetization strategy' }, { type: 'mrkdwn', text: '🤝 *Collab Mode*\nTeam session tracking with AI summaries' }] },
           divider(),
           { type: 'header', text: { type: 'plain_text', text: '🚀 Quick Start', emoji: true } },
-          { type: 'section', text: { type: 'mrkdwn', text: '*Try these commands in any channel:*\n\n`/wavmind ideas dark trap beat`\n`/wavmind reference Blinding Lights - The Weeknd`\n`/wavmind compare Drake and Travis Scott`\n`/wavmind samples dark trap drums`\n`/wavmind trending trap beats`\n`/wavmind bpm dark cinematic hip hop`\n`/wavmind chords F minor trap`\n`/wavmind tips 808 mixing`\n`/wavmind feedback my beat feels muddy at 140bpm`\n`/wavmind ar dark trap 140bpm heavy 808s`\n`/wavmind marketplace dark trap 140bpm F minor`\n`/wavmind career`\n`/wavmind sprint Finish my EP this week`' } },
+          { type: 'section', text: { type: 'mrkdwn', text: '*Try these commands in any channel:*\n\n`/wavmind ideas dark trap beat`\n`/wavmind reference Blinding Lights - The Weeknd`\n`/wavmind compare Drake and Travis Scott`\n`/wavmind samples drums`\n`/wavmind samples piano`\n`/wavmind trending plugins`\n`/wavmind bpm dark cinematic hip hop`\n`/wavmind chords F minor trap`\n`/wavmind tips 808 mixing`\n`/wavmind feedback my beat feels muddy at 140bpm`\n`/wavmind ar dark trap 140bpm heavy 808s`\n`/wavmind release trap beat 140bpm mixed and mastered`\n`/wavmind marketplace dark trap 140bpm F minor`' } },
           divider(),
           { type: 'header', text: { type: 'plain_text', text: '🎵 Free Sample Search', emoji: true } },
-          { type: 'section', text: { type: 'mrkdwn', text: 'Search 500,000+ free Creative Commons samples directly in Slack:\n\n`/wavmind samples dark trap drums`\n`/wavmind samples lo-fi piano loop`\n`/wavmind samples 808 bass`\n`/wavmind samples jazz guitar`\n`/wavmind samples cinematic strings`\n`/wavmind samples vinyl crackle`\n\n_All sounds are Creative Commons — free to use in your music_' } },
+          { type: 'section', text: { type: 'mrkdwn', text: 'Search 500,000+ free Creative Commons samples directly in Slack:\n\n`/wavmind samples drums`\n`/wavmind samples piano`\n`/wavmind samples bass`\n`/wavmind samples guitar`\n`/wavmind samples synth`\n`/wavmind samples strings`\n`/wavmind samples vinyl`\n`/wavmind samples ambient`\n\n_All sounds are Creative Commons — free to use in your music_\n_Click Preview to listen · Click Download to get the file_' } },
           divider(),
           { type: 'header', text: { type: 'plain_text', text: '🤝 Collab Mode', emoji: true } },
           { type: 'section', text: { type: 'mrkdwn', text: 'Work on tracks with your team inside Slack:\n\n`/wavmind collab start "Track Name"` — Start a session\n`/wavmind collab idea [idea]` — Log a production idea\n`/wavmind collab feedback [feedback]` — Log mix feedback\n`/wavmind collab decision [decision]` — Log a final decision\n`/wavmind collab summary` — Get full AI session summary\n`/wavmind collab end` — End and archive the session' } },
@@ -363,8 +371,10 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
       await respond({
         blocks: [
           header('🎵 Free Sample Search'),
-          section('Search 500,000+ free Creative Commons samples.\n\n*Examples:*\n`/wavmind samples dark trap drums`\n`/wavmind samples lo-fi piano loop`\n`/wavmind samples 808 bass`\n`/wavmind samples jazz guitar`\n`/wavmind samples cinematic strings`\n`/wavmind samples vinyl crackle`\n`/wavmind samples ambient pad`'),
-          context('💡 All sounds are Creative Commons — free to use in your music'),
+          section('Search 500,000+ free Creative Commons samples from Freesound.org.\n\n*Examples:*\n`/wavmind samples drums`\n`/wavmind samples piano`\n`/wavmind samples bass`\n`/wavmind samples guitar`\n`/wavmind samples synth`\n`/wavmind samples strings`\n`/wavmind samples vinyl`\n`/wavmind samples ambient`'),
+          divider(),
+          section('💡 *Tips for best results:*\n• Use simple keywords: `drums` not `dark trap drums 140bpm loop`\n• Try instrument names: `piano`, `guitar`, `bass`, `synth`\n• Try style tags: `trap`, `lofi`, `jazz`, `ambient`'),
+          context('All sounds are Creative Commons — free to use in your music'),
         ],
       });
       return;
@@ -372,7 +382,7 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
 
     await respond({
       blocks: [
-        header('🎵 Searching Freesound...'),
+        header('🎵 Searching Freesound.org...'),
         section(`Searching for *"${query}"* samples`),
         context('⏳ Finding free Creative Commons sounds...'),
       ],
@@ -381,23 +391,53 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
     const sounds = await searchFreesound(query);
 
     if (!sounds || sounds.length === 0) {
-      await respond({
-        blocks: [
-          header('❗ No Samples Found'),
-          section(`No sounds found for *"${query}"*.\n\nTry different keywords:\n• Be more general: \`drums\` instead of \`trap drums 140bpm\`\n• Try: \`/wavmind samples kick drum\`\n• Try: \`/wavmind samples piano loop\``),
-          context('💡 Freesound has over 500,000 free sounds'),
-        ],
-      });
+      const simpleQuery = query.split(' ')[0];
+      const retrySounds = simpleQuery !== query ? await searchFreesound(simpleQuery) : null;
+
+      if (retrySounds && retrySounds.length > 0) {
+        const soundBlocks = [
+          header(`🎵 Samples for "${simpleQuery}"`),
+          section(`_No exact results for "${query}" — showing results for "${simpleQuery}"_`),
+          divider(),
+        ];
+        retrySounds.forEach((sound, i) => {
+          soundBlocks.push(
+            section(
+              `*${i + 1}. ${sound.name}*\n` +
+              `⏱️ *${sound.duration}s* · ⭐ *${sound.rating}/5* · 📥 *${sound.downloads.toLocaleString()} downloads*\n` +
+              `📄 *License:* ${sound.license}\n` +
+              `🏷️ ${sound.tags}\n` +
+              `👤 By *${sound.username}*\n\n` +
+              `${sound.preview ? `🔊 *<${sound.preview}|▶ Listen to Preview>*\n` : ''}` +
+              `🔗 *<${sound.url}|📥 View & Download on Freesound>*`
+            )
+          );
+          if (i < retrySounds.length - 1) soundBlocks.push(divider());
+        });
+        soundBlocks.push(divider(), context('🎵 Powered by Freesound.org · Try simpler keywords for more results'));
+        await respond({ blocks: soundBlocks });
+      } else {
+        await respond({
+          blocks: [
+            header('❗ No Samples Found'),
+            section(`No sounds found for *"${query}"*.\n\n*Try simpler keywords:*\n• \`/wavmind samples drums\` instead of "dark trap drums 140bpm"\n• \`/wavmind samples piano\` instead of "lo-fi piano loop"\n• \`/wavmind samples bass\` instead of "808 bass loop"`),
+            divider(),
+            section(`🔗 *<https://freesound.org/search/?q=${encodeURIComponent(query)}|Browse "${query}" on Freesound.org>*`),
+            context('Freesound has 500,000+ free Creative Commons sounds'),
+          ],
+        });
+      }
       return;
     }
 
     const aiTip = await askAI(
-      `You are Wavmind. A producer searched for "${query}" samples and found: ${sounds.map(s => s.name).join(', ')}. Give 2-3 quick tips on how to best use these types of samples in music production. Under 80 words. Format with bullet points.`
+      `You are Wavmind. A producer searched for "${query}" samples and found: ${sounds.slice(0, 3).map(s => s.name).join(', ')}. Give 2-3 specific tips on how to use these in music production. Under 80 words. Format with • bullet points.`
     );
 
     const soundBlocks = [
       header(`🎵 Free Samples: "${query}"`),
-      section(`Found *${sounds.length} sounds* from Freesound.org — all free to use`),
+      section(`Found *${sounds.length} sounds* on Freesound.org — all free to use`),
+      context('💡 Click Listen to preview · Click Download to get the full file on Freesound'),
       divider(),
     ];
 
@@ -406,13 +446,13 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
         section(
           `*${i + 1}. ${sound.name}*\n` +
           `⏱️ *Duration:* ${sound.duration}s · ` +
-          `📄 *License:* ${sound.license}\n` +
           `⭐ *Rating:* ${sound.rating}/5 · ` +
           `📥 *Downloads:* ${sound.downloads.toLocaleString()}\n` +
-          `🏷️ _Tags: ${sound.tags}_\n` +
-          `👤 *By:* ${sound.username}\n` +
-          `${sound.preview ? `🔊 <${sound.preview}|Preview Audio> · ` : ''}` +
-          `🔗 <${sound.url}|View & Download on Freesound>`
+          `📄 *License:* ${sound.license}\n` +
+          `🏷️ *Tags:* ${sound.tags}\n` +
+          `👤 *By:* ${sound.username}\n\n` +
+          `${sound.preview ? `🔊 *<${sound.preview}|▶ Listen to Preview>*     ` : ''}` +
+          `🔗 *<${sound.url}|📥 View & Download on Freesound>*`
         )
       );
       if (i < sounds.length - 1) soundBlocks.push(divider());
@@ -421,14 +461,15 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
     if (aiTip) {
       soundBlocks.push(
         divider(),
-        header('💡 How to Use These Samples'),
+        header('💡 Production Tips'),
         section(aiTip),
       );
     }
 
     soundBlocks.push(
       divider(),
-      context('🎵 All sounds are Creative Commons · Powered by Freesound.org · Try `/wavmind samples [keywords]` for more results')
+      section(`🔗 *<https://freesound.org/search/?q=${encodeURIComponent(query)}|Browse more "${query}" sounds on Freesound.org>*`),
+      context('🎵 All sounds Creative Commons licensed · Powered by Freesound.org')
     );
 
     await respond({ blocks: soundBlocks });
@@ -574,7 +615,7 @@ Give professional summary: overview, key creative directions, main issues, decis
 IDEAS: ${session.ideas.map(i => i.text).join(', ') || 'None'}
 FEEDBACK: ${session.feedback.map(f => f.text).join(', ') || 'None'}
 DECISIONS: ${session.decisions.map(d => d.text).join(', ') || 'None'}
-Write final report: overview, creative direction, technical decisions, action items, closing note. Format professionally.`);
+Write final report: overview, creative direction, technical decisions, action items, closing note. Format professionally with emojis.`);
       endCollabSession(command.channel_id);
       await respond({
         response_type: 'in_channel',
@@ -690,7 +731,7 @@ Give: key production differences, what makes each unique, how to blend styles, w
         divider(),
         section(response || 'Could not generate ideas. Try again!'),
         divider(),
-        context('💡 Use `/wavmind bpm [genre]` to get BPM and key suggestions · `/wavmind samples [genre] drums` for free samples'),
+        context('💡 Use `/wavmind bpm [genre]` to get BPM and key suggestions · `/wavmind samples drums` for free samples'),
       ],
     });
     return;
@@ -734,7 +775,7 @@ Give: key production differences, what makes each unique, how to blend styles, w
     const contextInfo = stored ? `Energy: ${stored.energy}%, Brightness: ${stored.brightness}, Bass presence: ${stored.bass_ratio}%` : '';
     const response = await askAI(`You are Wavmind, a professional mixing engineer. Producer track details:
 BPM: ${bpm}, Key: ${key}. ${contextInfo}
-Give specific professional mixing feedback including: what BPM and key suggest about genre and mood, EQ advice, compression recommendations, arrangement suggestions, 3 specific improvements. Use real plugin names. Format with emojis and clear sections.`);
+Give specific professional mixing feedback: what BPM and key suggest about genre and mood, EQ advice, compression recommendations, arrangement suggestions, 3 specific improvements. Use real plugin names. Format with emojis.`);
     if (global.pendingAnalysis?.[command.channel_id]) delete global.pendingAnalysis[command.channel_id];
     await respond({
       blocks: [
@@ -844,45 +885,6 @@ Provide: BeatStars Title (SEO), 20 Tags, Description for buyers, YouTube Title, 
     return;
   }
 
-  // ─── CAREER ──────────────────────────────────────────
-  if (lower.startsWith('career')) {
-    const details = input.slice(6).trim();
-    await respond({ blocks: [header('🚀 Analyzing Your Career Path...'), context('⏳ Building your personalized music industry roadmap...')] });
-    const response = await askAI(`You are a music industry career coach. ${details ? `Producer says: "${details}".` : ''}
-Analyze top 3 career paths from: Producer, Mixing Engineer, Mastering Engineer, Sound Designer, Film Composer, Sample Pack Creator, Beat Seller.
-For each: why it fits, skills to develop, income potential, first 3 steps this week. End with one bold recommendation.`);
-    await respond({
-      blocks: [
-        header('🚀 Your Music Career Roadmap'),
-        divider(),
-        section(response || 'Could not generate roadmap. Try again!'),
-        divider(),
-        context('💡 `/wavmind sprint [goal]` to start your career plan this week'),
-      ],
-    });
-    return;
-  }
-
-  // ─── SPRINT ──────────────────────────────────────────
-  if (lower.startsWith('sprint')) {
-    const goal = input.slice(6).trim();
-    if (!goal) { await respond({ blocks: [header('❗ Missing Goal'), section('*Example:*\n`/wavmind sprint Finish my trap EP this week`\n`/wavmind sprint Release my first beat on BeatStars`')] }); return; }
-    await respond({ blocks: [header('📅 Creating Your Production Sprint...'), section(`*Goal:* ${goal}`), context('⏳ Building your weekly plan...')] });
-    const response = await askAI(`Create a detailed 7-day production sprint for: "${goal}". Day-by-day plan with 2-3 specific tasks each day. End with success metrics. Be realistic and specific.`);
-    await respond({
-      response_type: 'in_channel',
-      blocks: [
-        header('📅 Production Sprint Created'),
-        section(`*Goal:* ${goal}`),
-        divider(),
-        section(response || 'Could not generate plan. Try again!'),
-        divider(),
-        context('💡 Use `/wavmind collab start "Track Name"` to track your progress with your team'),
-      ],
-    });
-    return;
-  }
-
   // ─── BPM ─────────────────────────────────────────────
   if (lower.startsWith('bpm')) {
     const mood = input.slice(3).trim() || 'general';
@@ -895,7 +897,7 @@ For each: why it fits, skills to develop, income potential, first 3 steps this w
         divider(),
         section(response || 'Could not generate. Try again!'),
         divider(),
-        context('💡 Use `/wavmind chords [key + genre]` to get chord progressions · `/wavmind samples [genre] drums` for free samples'),
+        context('💡 Use `/wavmind chords [key + genre]` · `/wavmind samples drums` for free samples'),
       ],
     });
     return;
