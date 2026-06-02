@@ -278,7 +278,7 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-const MCP_PORT = process.env.MCP_PORT || 8000;
+const MCP_PORT = process.env.MCP_PORT || 3001;
 server.listen(MCP_PORT, () => {
   console.log(`🔌 Wavmind MCP Server running on port ${MCP_PORT}`);
   console.log(`📋 Tools: ${tools.map(t => t.name).join(', ')}`);
