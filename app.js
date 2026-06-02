@@ -53,7 +53,7 @@ async function searchFreesound(query) {
       .join(' ');
 
     const searchQuery = encodeURIComponent(cleanQuery || query);
-    const url = `https://freesound.org/apiv2/search/text/?query=${searchQuery}&token=${process.env.FREESOUND_API_KEY}&format=json&page_size=5&fields=id,name,tags,duration,license,username,previews,avg_rating,num_downloads&filter=duration:[1+TO+30]`;
+    const url = `https://freesound.org/apiv2/search/text/?query=${searchQuery}&token=${process.env.FREESOUND_API_KEY}&format=json&page_size=10&fields=id,name,tags,duration,license,username,previews,avg_rating,num_downloads&filter=duration:[1+TO+30]`;
     const res = await axios.get(url, { timeout: 10000 });
     const sounds = res.data.results || [];
     if (!sounds.length) return null;
