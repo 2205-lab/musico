@@ -41,6 +41,34 @@ async function askAI(prompt) {
   }
 }
 
+// ─── TAVILY SEARCH ────────────────────────────────────────
+async function tavilySearch(query) {
+  try {
+    const res = await axios.post(
+      'https://api.tavily.com/search',
+      {
+        api_key: process.env.TAVILY_API_KEY,
+        query,
+        search_depth: 'basic',
+        max_results: 5,
+        include_answer: true,
+      },
+      { timeout: 10000 }
+    );
+    return {
+      answer: res.data.answer || null,
+      results: (res.data.results || []).map(r => ({
+        title: r.title,
+        url: r.url,
+        content: r.content?.slice(0, 300) || '',
+      })),
+    };
+  } catch (err) {
+    console.error('Tavily error:', err.message);
+    return null;
+  }
+}
+
 // ─── FREESOUND ────────────────────────────────────────────
 async function searchFreesound(query) {
   try {
@@ -227,14 +255,15 @@ function getWelcomeBlocks() {
     section('*🎚️ Mixing Feedback*\n`/wavmind feedback [describe your mix]`\n_Example: `/wavmind feedback my beat feels muddy at 140bpm`_'),
     section('*🔍 Reference Track Analysis*\n`/wavmind reference [track - artist]`\n_Pulls real Spotify data and gives you a sound blueprint_\n_Example: `/wavmind reference Blinding Lights - The Weeknd`_'),
     section('*🎤 Artist Comparison*\n`/wavmind compare [artist1] and [artist2]`\n_Compare production styles using real Spotify data_\n_Example: `/wavmind compare Drake and Travis Scott`_'),
+    section('*🎹 DAW Knowledge*\n`/wavmind daw [daw name] [question]`\n_Real-time tutorials powered by Tavily + Groq AI_\n_Example: `/wavmind daw fl studio how to sidechain 808`_\n_Supported: FL Studio · Ableton Live · Logic Pro · Pro Tools · Cubase · Studio One_'),
     section('*🎵 Free Samples*\n`/wavmind samples [keywords]`\n_Search 500,000+ free Creative Commons samples_\n_Example: `/wavmind samples drums` · `/wavmind samples piano` · `/wavmind samples bass`_'),
     section('*📰 Trending News*\n`/wavmind trending [topic]`\n_Real-time music industry news and AI insights_\n_Example: `/wavmind trending plugins`_'),
     section('*🥁 BPM & Key Suggestions*\n`/wavmind bpm [mood or genre]`\n_Example: `/wavmind bpm dark cinematic hip hop`_'),
     section('*🎹 Chord Progressions*\n`/wavmind chords [key + genre]`\n_Example: `/wavmind chords F minor trap`_'),
     section('*💡 Production Tips*\n`/wavmind tips [topic]`\n_Example: `/wavmind tips 808 mixing`_'),
     section('*🎯 A&R Simulation*\n`/wavmind ar [describe your track]`\n_Label executive evaluation of commercial potential_\n_Example: `/wavmind ar dark trap 140bpm heavy 808s`_'),
-    section('*✅ Release Readiness*\n`/wavmind release [describe your track]`\n_Pre-release checklist for mix, metadata and distribution_\n_Example: `/wavmind release trap beat 140bpm mixed and mastered`_'),
-    section('*💰 Beat Marketplace*\n`/wavmind marketplace [genre + BPM + key]`\n_BeatStars tags, SEO titles, YouTube descriptions_\n_Example: `/wavmind marketplace dark trap 140bpm F minor`_'),
+    section('*✅ Release Readiness*\n`/wavmind release [describe your track]`\n_Pre-release checklist for mix, metadata and distribution_'),
+    section('*💰 Beat Marketplace*\n`/wavmind marketplace [genre + BPM + key]`\n_BeatStars tags, SEO titles, YouTube descriptions_'),
     section('*🤝 Collab Mode*\n`/wavmind collab start "Track Name"` — Start a session\n`/wavmind collab idea [idea]` — Log an idea\n`/wavmind collab feedback [feedback]` — Log feedback\n`/wavmind collab decision [decision]` — Log a decision\n`/wavmind collab summary` — Get AI summary\n`/wavmind collab end` — End session'),
     divider(),
     section('*🎛️ Audio File Analysis + Mix Feedback*\n*Step 1:* Upload any MP3 or WAV file directly in Slack\n*Step 2:* Wavmind scans energy, brightness and bass\n*Step 3:* Tell me your BPM and Key from your DAW\n*Step 4:* Get professional AI mixing feedback\n\n`/wavmind mixfeedback bpm:85 key:F_minor`\n_Key format: `C_major` · `F_minor` · `G_major` · `A_minor` · `Bb_major`_'),
@@ -255,21 +284,25 @@ app.event('app_home_opened', async ({ event, client }) => {
           divider(),
           { type: 'section', text: { type: 'mrkdwn', text: '🎵 *What can Wavmind do for you?*' } },
           { type: 'section', fields: [{ type: 'mrkdwn', text: '🎵 *Track Ideas*\nGenerate creative track concepts for any genre or mood' }, { type: 'mrkdwn', text: '🎚️ *Mix Feedback*\nGet professional mixing advice for your beats' }] },
-          { type: 'section', fields: [{ type: 'mrkdwn', text: '🔍 *Reference Tracks*\nPull real Spotify data from any song and get a sound blueprint' }, { type: 'mrkdwn', text: '🎤 *Artist Comparison*\nCompare two artists production styles using real Spotify data' }] },
-          { type: 'section', fields: [{ type: 'mrkdwn', text: '🎵 *Free Samples*\nSearch 500,000+ Creative Commons samples via Freesound' }, { type: 'mrkdwn', text: '📰 *Trending News*\nReal-time music industry news with AI insights' }] },
-          { type: 'section', fields: [{ type: 'mrkdwn', text: '🎹 *Chord Progressions*\nMusic theory-based chord ideas for any key and genre' }, { type: 'mrkdwn', text: '🥁 *BPM & Key*\nIdeal tempo and key suggestions for any mood' }] },
-          { type: 'section', fields: [{ type: 'mrkdwn', text: '💡 *Production Tips*\nExpert tips on any music production topic' }, { type: 'mrkdwn', text: '🎛️ *Audio Analysis*\nUpload MP3/WAV — Wavmind scans energy, brightness and bass' }] },
-          { type: 'section', fields: [{ type: 'mrkdwn', text: '🎯 *A&R Simulation*\nLabel exec evaluation of your track\'s commercial potential' }, { type: 'mrkdwn', text: '✅ *Release Readiness*\nPre-release checklist for mix, metadata and distribution' }] },
-          { type: 'section', fields: [{ type: 'mrkdwn', text: '💰 *Beat Marketplace*\nBeatStars SEO, tags and monetization strategy' }, { type: 'mrkdwn', text: '🤝 *Collab Mode*\nTeam session tracking with AI summaries' }] },
+          { type: 'section', fields: [{ type: 'mrkdwn', text: '🔍 *Reference Tracks*\nPull real Spotify data and get a full sound blueprint' }, { type: 'mrkdwn', text: '🎤 *Artist Comparison*\nCompare two artists production styles with Spotify data' }] },
+          { type: 'section', fields: [{ type: 'mrkdwn', text: '🎹 *DAW Knowledge*\nReal-time tutorials for FL Studio, Ableton, Logic and more' }, { type: 'mrkdwn', text: '🎵 *Free Samples*\nSearch 500,000+ Creative Commons samples via Freesound' }] },
+          { type: 'section', fields: [{ type: 'mrkdwn', text: '📰 *Trending News*\nReal-time music industry news with AI insights' }, { type: 'mrkdwn', text: '🎹 *Chord Progressions*\nMusic theory-based chord ideas for any key and genre' }] },
+          { type: 'section', fields: [{ type: 'mrkdwn', text: '🥁 *BPM & Key*\nIdeal tempo and key suggestions for any mood' }, { type: 'mrkdwn', text: '💡 *Production Tips*\nExpert tips on any music production topic' }] },
+          { type: 'section', fields: [{ type: 'mrkdwn', text: '🎛️ *Audio Analysis*\nUpload MP3/WAV — Wavmind scans energy, brightness and bass' }, { type: 'mrkdwn', text: '🎯 *A&R Simulation*\nLabel exec evaluation of your track\'s commercial potential' }] },
+          { type: 'section', fields: [{ type: 'mrkdwn', text: '✅ *Release Readiness*\nPre-release checklist for mix, metadata and distribution' }, { type: 'mrkdwn', text: '💰 *Beat Marketplace*\nBeatStars SEO, tags and monetization strategy' }] },
+          { type: 'section', fields: [{ type: 'mrkdwn', text: '🤝 *Collab Mode*\nTeam session tracking with AI summaries' }, { type: 'mrkdwn', text: '🎵 *Mix Feedback*\nUpload audio + provide BPM/key for deep analysis' }] },
+          divider(),
+          { type: 'header', text: { type: 'plain_text', text: '🎹 DAW Knowledge Base', emoji: true } },
+          { type: 'section', text: { type: 'mrkdwn', text: 'Get real-time step-by-step tutorials for any DAW — powered by Tavily web search + Groq AI:\n\n`/wavmind daw fl studio how to sidechain 808`\n`/wavmind daw ableton how to warp audio`\n`/wavmind daw logic pro how to use flex pitch`\n`/wavmind daw pro tools how to set up sessions`\n`/wavmind daw cubase how to use chord track`\n`/wavmind daw studio one how to use scratch pad`\n\n*Supported DAWs:*\nFL Studio · Ableton Live · Logic Pro · Pro Tools · Cubase · Studio One · GarageBand · Reason · Bitwig' } },
           divider(),
           { type: 'header', text: { type: 'plain_text', text: '🚀 Quick Start', emoji: true } },
-          { type: 'section', text: { type: 'mrkdwn', text: '*Try these commands in any channel:*\n\n`/wavmind ideas dark trap beat`\n`/wavmind reference Blinding Lights - The Weeknd`\n`/wavmind compare Drake and Travis Scott`\n`/wavmind samples drums`\n`/wavmind samples piano`\n`/wavmind trending plugins`\n`/wavmind bpm dark cinematic hip hop`\n`/wavmind chords F minor trap`\n`/wavmind tips 808 mixing`\n`/wavmind feedback my beat feels muddy at 140bpm`\n`/wavmind ar dark trap 140bpm heavy 808s`\n`/wavmind release trap beat 140bpm mixed and mastered`\n`/wavmind marketplace dark trap 140bpm F minor`' } },
+          { type: 'section', text: { type: 'mrkdwn', text: '`/wavmind ideas dark trap beat`\n`/wavmind reference Blinding Lights - The Weeknd`\n`/wavmind compare Drake and Travis Scott`\n`/wavmind daw fl studio how to sidechain 808`\n`/wavmind samples drums`\n`/wavmind samples piano`\n`/wavmind trending plugins`\n`/wavmind bpm dark cinematic hip hop`\n`/wavmind chords F minor trap`\n`/wavmind tips 808 mixing`\n`/wavmind feedback my beat feels muddy at 140bpm`\n`/wavmind ar dark trap 140bpm heavy 808s`\n`/wavmind marketplace dark trap 140bpm F minor`' } },
           divider(),
           { type: 'header', text: { type: 'plain_text', text: '🎵 Free Sample Search', emoji: true } },
-          { type: 'section', text: { type: 'mrkdwn', text: 'Search 500,000+ free Creative Commons samples directly in Slack:\n\n`/wavmind samples drums`\n`/wavmind samples piano`\n`/wavmind samples bass`\n`/wavmind samples guitar`\n`/wavmind samples synth`\n`/wavmind samples strings`\n`/wavmind samples vinyl`\n`/wavmind samples ambient`\n\n_All sounds are Creative Commons — free to use in your music_\n_Click Preview to listen · Click Download to get the file_' } },
+          { type: 'section', text: { type: 'mrkdwn', text: 'Search 500,000+ free Creative Commons samples:\n\n`/wavmind samples drums`\n`/wavmind samples piano`\n`/wavmind samples bass`\n`/wavmind samples guitar`\n`/wavmind samples synth`\n`/wavmind samples strings`\n`/wavmind samples vinyl`\n`/wavmind samples ambient`\n\n_All sounds are Creative Commons — free to use in your music_' } },
           divider(),
           { type: 'header', text: { type: 'plain_text', text: '🤝 Collab Mode', emoji: true } },
-          { type: 'section', text: { type: 'mrkdwn', text: 'Work on tracks with your team inside Slack:\n\n`/wavmind collab start "Track Name"` — Start a session\n`/wavmind collab idea [idea]` — Log a production idea\n`/wavmind collab feedback [feedback]` — Log mix feedback\n`/wavmind collab decision [decision]` — Log a final decision\n`/wavmind collab summary` — Get full AI session summary\n`/wavmind collab end` — End and archive the session' } },
+          { type: 'section', text: { type: 'mrkdwn', text: '`/wavmind collab start "Track Name"` — Start a session\n`/wavmind collab idea [idea]` — Log a production idea\n`/wavmind collab feedback [feedback]` — Log mix feedback\n`/wavmind collab decision [decision]` — Log a final decision\n`/wavmind collab summary` — Get full AI session summary\n`/wavmind collab end` — End and archive the session' } },
           divider(),
           { type: 'header', text: { type: 'plain_text', text: '🎛️ Audio Analysis Workflow', emoji: true } },
           { type: 'section', text: { type: 'mrkdwn', text: '*Step 1* — Upload any MP3 or WAV file in any channel\n*Step 2* — Wavmind scans energy, brightness, bass and duration\n*Step 3* — You provide your BPM and Key from your DAW\n*Step 4* — Wavmind gives you professional AI mixing feedback\n\n`/wavmind mixfeedback bpm:85 key:F_minor`' } },
@@ -277,8 +310,8 @@ app.event('app_home_opened', async ({ event, client }) => {
           divider(),
           { type: 'header', text: { type: 'plain_text', text: '📊 About Wavmind', emoji: true } },
           { type: 'section', fields: [{ type: 'mrkdwn', text: '🤖 *AI Engine*\nGroq — Llama 3.1' }, { type: 'mrkdwn', text: '🎵 *Music Data*\nReal Spotify API' }] },
-          { type: 'section', fields: [{ type: 'mrkdwn', text: '📰 *News Data*\nNewsData.io Real-Time API' }, { type: 'mrkdwn', text: '🎧 *Audio Analysis*\nLibrosa Python' }] },
-          { type: 'section', fields: [{ type: 'mrkdwn', text: '🎵 *Free Samples*\nFreesound.org — 500K+ sounds' }, { type: 'mrkdwn', text: '🤝 *Collaboration*\nTeam session tracking' }] },
+          { type: 'section', fields: [{ type: 'mrkdwn', text: '🔍 *DAW Search*\nTavily Real-Time Web Search' }, { type: 'mrkdwn', text: '📰 *News*\nNewsData.io Real-Time API' }] },
+          { type: 'section', fields: [{ type: 'mrkdwn', text: '🎵 *Free Samples*\nFreesound.org — 500K+ sounds' }, { type: 'mrkdwn', text: '🎧 *Audio Analysis*\nLibrosa Python' }] },
           divider(),
           { type: 'context', elements: [{ type: 'mrkdwn', text: '🎛️ *Wavmind* — Built for music producers | Type `/wavmind` in any channel to get started' }] },
         ],
@@ -361,6 +394,136 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
 
   if (!input || lower === 'help') {
     await respond({ response_type: 'ephemeral', blocks: getWelcomeBlocks() });
+    return;
+  }
+
+  // ─── DAW KNOWLEDGE ───────────────────────────────────
+  if (lower.startsWith('daw')) {
+    const dawInput = input.slice(3).trim();
+
+    if (!dawInput) {
+      await respond({
+        blocks: [
+          header('🎹 DAW Knowledge Base'),
+          section('Get real-time step-by-step tutorials for any DAW.\n\n*Format:*\n`/wavmind daw [daw name] [your question]`\n\n*Examples:*\n`/wavmind daw fl studio how to sidechain 808`\n`/wavmind daw ableton how to warp audio`\n`/wavmind daw logic pro how to use flex pitch`\n`/wavmind daw pro tools how to set up sessions`\n`/wavmind daw cubase how to use chord track`\n`/wavmind daw studio one how to use scratch pad`'),
+          divider(),
+          section('*Supported DAWs:*\nFL Studio · Ableton Live · Logic Pro · Pro Tools · Cubase · Studio One · GarageBand · Reason · Bitwig · Reaper'),
+          context('💡 Powered by Tavily real-time search + Groq AI for the most accurate answers'),
+        ],
+      });
+      return;
+    }
+
+    // Detect which DAW
+    const dawList = [
+      { name: 'FL Studio', keywords: ['fl studio', 'fl', 'fruity loops'] },
+      { name: 'Ableton Live', keywords: ['ableton', 'ableton live', 'live'] },
+      { name: 'Logic Pro', keywords: ['logic', 'logic pro', 'logic pro x'] },
+      { name: 'Pro Tools', keywords: ['pro tools', 'protools'] },
+      { name: 'Cubase', keywords: ['cubase'] },
+      { name: 'Studio One', keywords: ['studio one', 'studio 1'] },
+      { name: 'GarageBand', keywords: ['garageband', 'garage band'] },
+      { name: 'Reason', keywords: ['reason'] },
+      { name: 'Bitwig', keywords: ['bitwig'] },
+      { name: 'Reaper', keywords: ['reaper'] },
+    ];
+
+    let detectedDAW = null;
+    let question = dawInput;
+
+    for (const daw of dawList) {
+      for (const keyword of daw.keywords) {
+        if (dawInput.toLowerCase().startsWith(keyword)) {
+          detectedDAW = daw.name;
+          question = dawInput.slice(keyword.length).trim();
+          break;
+        }
+      }
+      if (detectedDAW) break;
+    }
+
+    if (!detectedDAW) {
+      await respond({
+        blocks: [
+          header('❗ DAW Not Recognized'),
+          section(`Could not detect which DAW you mean from: *"${dawInput}"*\n\n*Format:* \`/wavmind daw [daw name] [question]\`\n\n*Example:*\n\`/wavmind daw fl studio how to sidechain 808\`\n\`/wavmind daw ableton how to warp audio\``),
+          context('Supported: FL Studio · Ableton Live · Logic Pro · Pro Tools · Cubase · Studio One · GarageBand · Reason · Bitwig · Reaper'),
+        ],
+      });
+      return;
+    }
+
+    if (!question) {
+      await respond({
+        blocks: [
+          header(`🎹 ${detectedDAW} Help`),
+          section(`What do you need help with in *${detectedDAW}*?\n\n*Example:*\n\`/wavmind daw ${detectedDAW.toLowerCase()} how to sidechain\`\n\`/wavmind daw ${detectedDAW.toLowerCase()} how to export stems\`\n\`/wavmind daw ${detectedDAW.toLowerCase()} how to set up audio interface\``),
+        ],
+      });
+      return;
+    }
+
+    await respond({
+      blocks: [
+        header(`🎹 ${detectedDAW} — Looking Up...`),
+        section(`*Question:* ${question}`),
+        context('⏳ Searching web + generating AI answer...'),
+      ],
+    });
+
+    // Run Tavily search and Groq AI in parallel
+    const searchQuery = `${detectedDAW} ${question} tutorial step by step`;
+    const [tavilyData, aiBase] = await Promise.all([
+      tavilySearch(searchQuery),
+      askAI(`You are Wavmind, an expert ${detectedDAW} instructor. Answer this question about ${detectedDAW}: "${question}". Give a clear step-by-step answer based on your training knowledge. Format with numbered steps and bold key terms.`),
+    ]);
+
+    // Build combined response
+    const blocks = [
+      header(`🎹 ${detectedDAW}: ${question}`),
+      divider(),
+    ];
+
+    // Add Groq AI answer first
+    if (aiBase) {
+      blocks.push(
+        section('🤖 *AI Answer:*'),
+        section(aiBase),
+      );
+    }
+
+    // Add Tavily web results
+    if (tavilyData) {
+      blocks.push(divider());
+
+      // If Tavily has a direct answer, show it
+      if (tavilyData.answer) {
+        blocks.push(
+          section('🌐 *From the Web:*'),
+          section(tavilyData.answer),
+        );
+      }
+
+      // Show top sources as links
+      if (tavilyData.results && tavilyData.results.length > 0) {
+        blocks.push(divider());
+        blocks.push(section('📚 *Helpful Resources:*'));
+
+        const sourceLinks = tavilyData.results
+          .slice(0, 4)
+          .map(r => `• <${r.url}|${r.title}>`)
+          .join('\n');
+
+        blocks.push(section(sourceLinks));
+      }
+    }
+
+    blocks.push(
+      divider(),
+      context(`🎹 ${detectedDAW} · Powered by Tavily web search + Groq AI · Try \`/wavmind daw ${detectedDAW.toLowerCase()} [another question]\``)
+    );
+
+    await respond({ blocks });
     return;
   }
 
@@ -685,7 +848,7 @@ Tell producers: what this means for music production, key trends, how to use the
       await respond({ blocks: [header('❗ Need Two Artists'), section('*Examples:*\n`/wavmind compare Drake and Travis Scott`\n`/wavmind compare Drake vs Travis Scott`')] });
       return;
     }
-    await respond({ blocks: [header('🔍 Comparing Artists...'), section(`Looking up *${artists}* on Spotify`), context('⏳ Fetching real audio data for both artists...')] });
+    await respond({ blocks: [header('🔍 Comparing Artists...'), section(`Looking up *${artists}* on Spotify`), context('⏳ Fetching real audio data...')] });
     let artist1, artist2;
     if (artists.toLowerCase().includes(' and ')) { [artist1, artist2] = artists.split(/\s+and\s+/i).map(s => s.trim()); }
     else if (artists.toLowerCase().includes(' vs ')) { [artist1, artist2] = artists.split(/\s+vs\s+/i).map(s => s.trim()); }
@@ -731,7 +894,7 @@ Give: key production differences, what makes each unique, how to blend styles, w
         divider(),
         section(response || 'Could not generate ideas. Try again!'),
         divider(),
-        context('💡 Use `/wavmind bpm [genre]` to get BPM and key suggestions · `/wavmind samples drums` for free samples'),
+        context('💡 Use `/wavmind bpm [genre]` for BPM suggestions · `/wavmind samples drums` for free samples'),
       ],
     });
     return;
@@ -773,8 +936,7 @@ Give: key production differences, what makes each unique, how to blend styles, w
     const stored = global.pendingAnalysis?.[command.channel_id];
     await respond({ blocks: [header('🎚️ Generating Mix Feedback...'), twoCol(`🥁 *BPM*\n${bpm}`, `🎵 *Key*\n${key}`), context('⏳ Analyzing your track...')] });
     const contextInfo = stored ? `Energy: ${stored.energy}%, Brightness: ${stored.brightness}, Bass presence: ${stored.bass_ratio}%` : '';
-    const response = await askAI(`You are Wavmind, a professional mixing engineer. Producer track details:
-BPM: ${bpm}, Key: ${key}. ${contextInfo}
+    const response = await askAI(`You are Wavmind, a professional mixing engineer. Track details: BPM ${bpm}, Key ${key}. ${contextInfo}
 Give specific professional mixing feedback: what BPM and key suggest about genre and mood, EQ advice, compression recommendations, arrangement suggestions, 3 specific improvements. Use real plugin names. Format with emojis.`);
     if (global.pendingAnalysis?.[command.channel_id]) delete global.pendingAnalysis[command.channel_id];
     await respond({
