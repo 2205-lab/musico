@@ -734,7 +734,26 @@ app.command('/wavmind', async ({ command, ack, respond }) => {
     await respond({ blocks: [header('💡 Production Tips'), section(`*${topic}*`), divider(), section(r||'Error')] });
     return;
   }
-
+// ─── MCP INFO ────────────────────────────────────────
+  if (lower === 'mcp') {
+    const railwayUrl = process.env.RAILWAY_PUBLIC_DOMAIN
+      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+      : 'your-railway-url.railway.app';
+    await respond({
+      blocks: [
+        header('🔌 Wavmind MCP Server'),
+        section('Connect any AI agent to Wavmind\'s music production tools via MCP.'),
+        divider(),
+        section('*📋 Available Tools:*\n• `search_samples` — Search 500K+ Freesound samples\n• `get_track_features` — Real Spotify audio data\n• `analyze_mix` — AI mixing feedback\n• `get_daw_help` — DAW tutorials via Tavily + AI\n• `compare_artists` — Artist DNA comparison\n• `get_track_ideas` — Track concept generation'),
+        divider(),
+        section(`*🔗 MCP Endpoints:*\n• Manifest: \`${railwayUrl}/mcp\`\n• List tools: \`${railwayUrl}/mcp/tools\`\n• Execute: \`POST ${railwayUrl}/mcp/execute\`\n• Health: \`${railwayUrl}/health\``),
+        divider(),
+        section('*Example request:*\n```POST /mcp/execute\n{\n  "tool": "search_samples",\n  "arguments": { "query": "trap drums" }\n}```'),
+        context('🔌 MCP Server · Compatible with Claude Desktop, GPT agents and any MCP client'),
+      ],
+    });
+    return;
+  }
   // ─── GENERAL ─────────────────────────────────────────
   await respond({ blocks: [header('🤔 Thinking...'), context('⏳')] });
   const response = await askAI(`You are Wavmind, expert AI for music producers. Answer: "${input}"`);
