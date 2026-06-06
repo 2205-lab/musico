@@ -87,9 +87,12 @@ $routeMap = [
 ];
 
 // Resolve route
+// If $id is non-numeric (e.g. "register", "login", "audio") it is an action name, not a record ID
 $routeKey = null;
 if ($id && $action) {
     $routeKey = "$method:$action";
+} elseif ($id && !is_numeric($id)) {
+    $routeKey = "$method:$id";
 } elseif ($id) {
     $routeKey = "$method:single";
 } else {
