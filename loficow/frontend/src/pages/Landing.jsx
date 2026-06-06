@@ -27,7 +27,7 @@ export default function Landing() {
             <div className="w-9 h-9 rounded-xl bg-gradient-brand flex items-center justify-center shadow-glow-purple">
               <Moon className="w-5 h-5 text-white" />
             </div>
-            <span className="font-display font-bold text-xl gradient-text">LoficOW</span>
+            <span className="font-display font-bold text-xl gradient-text">LofiCow</span>
           </div>
           <div className="flex items-center gap-3">
             <Link to="/auth?mode=login" className="btn-ghost text-sm">Sign in</Link>
@@ -60,7 +60,7 @@ export default function Landing() {
           </h1>
 
           <p className="text-lg text-slate-400 max-w-2xl mx-auto mb-10 leading-relaxed">
-            LoficOW is the dedicated space for lofi music creators — share beats, find collabs,
+            LofiCow is the dedicated space for lofi music creators — share beats, find collabs,
             submit demos to labels, and build your audience. Leave Discord behind.
           </p>
 
@@ -178,7 +178,7 @@ export default function Landing() {
               Ready to leave Discord?
             </h2>
             <p className="text-slate-400 mb-8">
-              Join thousands of lofi artists and labels already building their community on LoficOW.
+              Join thousands of lofi artists and labels already building their community on LofiCow.
             </p>
             <Link to="/auth?mode=register" className="btn-primary text-base px-10 py-3.5 inline-flex items-center gap-2">
               Create Your Profile <ArrowRight className="w-4 h-4" />
@@ -192,7 +192,7 @@ export default function Landing() {
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Moon className="w-4 h-4 text-purple-400" />
-            <span className="text-sm text-slate-500">LoficOW © 2025</span>
+            <span className="text-sm text-slate-500">LofiCow © 2025</span>
           </div>
           <div className="flex gap-6 text-sm text-slate-500">
             <a href="#" className="hover:text-slate-300">About</a>

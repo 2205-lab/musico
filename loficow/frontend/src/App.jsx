@@ -44,7 +44,7 @@ export default function App() {
     <div className="flex items-center justify-center h-screen bg-bg-primary">
       <div className="text-center">
         <div className="w-10 h-10 rounded-full border-2 border-purple-500/30 border-t-purple-500 animate-spin mx-auto mb-4" />
-        <p className="text-slate-500 text-sm">Loading LoficOW...</p>
+        <p className="text-slate-500 text-sm">Loading LofiCow...</p>
       </div>
     </div>
   )

@@ -29,7 +29,7 @@ export default function Auth() {
       } else {
         await register(form)
       }
-      toast.success(isLogin ? 'Welcome back! 🌙' : 'Welcome to LoficOW! 🎵')
+      toast.success(isLogin ? 'Welcome back! 🌙' : 'Welcome to LofiCow! 🎵')
       navigate('/feed')
     } catch (err) {
       toast.error(err.message)
@@ -52,12 +52,12 @@ export default function Auth() {
           <div className="w-10 h-10 rounded-xl bg-gradient-brand flex items-center justify-center shadow-glow-purple">
             <Moon className="w-5 h-5 text-white" />
           </div>
-          <span className="font-display font-bold text-2xl gradient-text">LoficOW</span>
+          <span className="font-display font-bold text-2xl gradient-text">LofiCow</span>
         </Link>
 
         <div className="card p-8">
           <h2 className="font-display font-bold text-2xl text-slate-100 text-center mb-2">
-            {isLogin ? 'Welcome back' : 'Join LoficOW'}
+            {isLogin ? 'Welcome back' : 'Join LofiCow'}
           </h2>
           <p className="text-slate-500 text-center text-sm mb-8">
             {isLogin ? 'Sign in to your account' : 'Create your free account today'}

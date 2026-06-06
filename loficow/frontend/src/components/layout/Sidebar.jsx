@@ -36,7 +36,7 @@ export default function Sidebar() {
             shadow-glow-purple group-hover:scale-105 transition-transform">
             <Moon className="w-5 h-5 text-white" />
           </div>
-          <span className="font-display font-bold text-xl gradient-text">LoficOW</span>
+          <span className="font-display font-bold text-xl gradient-text">LofiCow</span>
         </NavLink>
       </div>
 
