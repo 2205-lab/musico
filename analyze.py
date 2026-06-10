@@ -13,24 +13,20 @@ def analyze(path):
     import numpy as np
     import librosa
 
-    # Load with multiple fallback strategies to handle any file
     y_stereo = None
     sr = None
 
-    # Strategy 1: load stereo, native sample rate
     try:
         y_stereo, sr = librosa.load(path, sr=None, mono=False)
     except Exception:
         pass
 
-    # Strategy 2: load mono at 22050 (most compatible)
     if y_stereo is None:
         try:
             y_stereo, sr = librosa.load(path, sr=22050, mono=True)
         except Exception:
             pass
 
-    # Strategy 3: try ffmpeg decode via soundfile
     if y_stereo is None:
         try:
             import soundfile as sf
@@ -40,18 +36,17 @@ def analyze(path):
             pass
 
     if y_stereo is None:
-        raise ValueError("Could not decode audio — unsupported format")
+        raise ValueError("Could not decode audio")
 
-    # Normalise to stereo/mono
     if getattr(y_stereo, 'ndim', 1) == 1 or (hasattr(y_stereo, 'shape') and y_stereo.ndim == 1):
         left = right = y_stereo
         y = y_stereo
         is_stereo = False
     else:
-        if y_stereo.shape[0] <= 8:  # channels-first (librosa style)
+        if y_stereo.shape[0] <= 8:
             left = y_stereo[0]
             right = y_stereo[1] if y_stereo.shape[0] > 1 else y_stereo[0]
-        else:  # samples-first (soundfile style)
+        else:
             left = y_stereo[:, 0]
             right = y_stereo[:, 1] if y_stereo.shape[1] > 1 else y_stereo[:, 0]
         y = (left + right) / 2.0
@@ -60,14 +55,13 @@ def analyze(path):
     if y.size == 0:
         raise ValueError("empty audio")
 
-    # Truncate to max 3 minutes for analysis speed (keeps accuracy)
     max_samples = int(sr * 180)
     if len(y) > max_samples:
-        # Use middle section — most representative
         mid = len(y) // 2
-        y = y[mid - max_samples//2 : mid + max_samples//2]
-        left = left[mid - max_samples//2 : mid + max_samples//2] if is_stereo else y
-        right = right[mid - max_samples//2 : mid + max_samples//2] if is_stereo else y
+        half = max_samples // 2
+        y     = y[mid - half : mid + half]
+        left  = left[mid - half : mid + half]  if is_stereo else y
+        right = right[mid - half : mid + half] if is_stereo else y
 
     duration = float(len(y) / sr)
 
@@ -84,64 +78,75 @@ def analyze(path):
     else:
         brightness = "Bright (strong high end)"
 
-    # Spectral balance: energy per frequency band
+    # Spectral balance — use power spectrum summed per band
     S = np.abs(librosa.stft(y)) ** 2
     freqs = librosa.fft_frequencies(sr=sr)
     band_energy = S.sum(axis=1)
 
-    low  = float(band_energy[(freqs >= 20)   & (freqs <  250)].sum())
-    mid  = float(band_energy[(freqs >= 250)  & (freqs < 4000)].sum())
-    high = float(band_energy[(freqs >= 4000) & (freqs <= 20000)].sum())
-    presence = float(band_energy[(freqs >= 2000) & (freqs < 5000)].sum())
-    total = low + mid + high + 1e-12
+    # Only count audible range 20Hz-20kHz for percentages
+    audible_mask = (freqs >= 20) & (freqs <= 20000)
+    audible_total = float(band_energy[audible_mask].sum()) + 1e-12
 
-    low_pct  = round(low  / total * 100, 1)
-    mid_pct  = round(mid  / total * 100, 1)
-    high_pct = round(high / total * 100, 1)
+    low_mask      = (freqs >= 20)   & (freqs <  250)
+    mid_mask      = (freqs >= 250)  & (freqs < 4000)
+    high_mask     = (freqs >= 4000) & (freqs <= 20000)
+    # Vocal presence band: 1kHz-5kHz (wider, more accurate for vocals)
+    presence_mask = (freqs >= 1000) & (freqs < 5000)
+
+    low_e      = float(band_energy[low_mask].sum())
+    mid_e      = float(band_energy[mid_mask].sum())
+    high_e     = float(band_energy[high_mask].sum())
+    presence_e = float(band_energy[presence_mask].sum())
+
+    low_pct  = round(low_e  / audible_total * 100, 1)
+    mid_pct  = round(mid_e  / audible_total * 100, 1)
+    high_pct = round(high_e / audible_total * 100, 1)
     bass_ratio = int(round(low_pct))
-    vocal_clarity = int(max(0, min(100, round((presence / total) * 100 * 3.2))))
 
-    # Stereo width via mid/side
+    # Vocal clarity: presence band vs mid band
+    # High ratio = clear vocals cutting through the mix
+    mid_total = float(band_energy[mid_mask].sum()) + 1e-12
+    vocal_ratio = presence_e / mid_total
+    # Scale: 0.3 ratio = 30%, 0.7+ ratio = 90%+ clarity
+    vocal_clarity = int(max(0, min(100, round((vocal_ratio - 0.2) / 0.6 * 100))))
+
+    # Stereo width
     if is_stereo:
         mid_ch  = (left + right) / 2.0
         side_ch = (left - right) / 2.0
-        mid_e  = float(np.mean(mid_ch  ** 2)) + 1e-12
-        side_e = float(np.mean(side_ch ** 2))
-        stereo_width = int(round(side_e / (mid_e + side_e) * 100))
+        mid_e_ch  = float(np.mean(mid_ch  ** 2)) + 1e-12
+        side_e_ch = float(np.mean(side_ch ** 2))
+        stereo_width = int(round(side_e_ch / (mid_e_ch + side_e_ch) * 100))
     else:
         stereo_width = 0
 
-    # LUFS loudness
+    # LUFS
     lufs = None
     try:
         import pyloudnorm as pyln
         meter = pyln.Meter(sr)
-        if is_stereo:
-            data = np.vstack([left, right]).T
-        else:
-            data = y
+        data = np.vstack([left, right]).T if is_stereo else y
         lufs_val = float(meter.integrated_loudness(data))
         if lufs_val != float('-inf') and lufs_val == lufs_val:
             lufs = round(lufs_val, 1)
     except Exception:
         pass
-
     if lufs is None:
         lufs = round(float(20.0 * np.log10(rms + 1e-9)), 1)
 
     return {
-        "energy":           energy,
-        "brightness":       brightness,
-        "bass_ratio":       bass_ratio,
-        "duration":         int(round(duration)),
-        "lufs":             lufs,
-        "stereo_width":     stereo_width,
-        "is_stereo":        bool(is_stereo),
-        "low_pct":          low_pct,
-        "mid_pct":          mid_pct,
-        "high_pct":         high_pct,
+        "energy":            energy,
+        "brightness":        brightness,
+        "bass_ratio":        bass_ratio,
+        "duration":          int(round(duration)),
+        "lufs":              lufs,
+        "stereo_width":      stereo_width,
+        "is_stereo":         bool(is_stereo),
+        "low_pct":           low_pct,
+        "mid_pct":           mid_pct,
+        "high_pct":          high_pct,
         "spectral_centroid": int(round(cent)),
-        "vocal_clarity":    vocal_clarity,
+        "vocal_clarity":     vocal_clarity,
     }
 
 
