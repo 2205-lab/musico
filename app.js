@@ -4,7 +4,7 @@ const Groq = require('groq-sdk');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 const http = require('http');
 
 // ─── CRASH PROTECTION ─────────────────────────────────────
@@ -244,7 +244,10 @@ async function analyzeAudioFile(fileUrl, filename) {
   try {
     const r = await axios.get(fileUrl, { headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }, responseType: 'arraybuffer', timeout: 30000 });
     fs.writeFileSync(fp, r.data);
-    const out = execSync(`python3 analyze.py "${fp}"`, { timeout: 90000 }).toString().trim();
+    const result = spawnSync('python3', ['analyze.py', fp], { timeout: 90000, encoding: 'utf8' });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(result.stderr || 'analyze.py failed');
+    const out = result.stdout.trim();
     if (fs.existsSync(fp)) fs.unlinkSync(fp);
     const a = JSON.parse(out);
     if (a.error) { console.error('analyze.py error:', a.error); return { error: a.error }; }
@@ -758,29 +761,56 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
 
   // ── FEEDBACK ──────────────────────────────────────────
   if (lower.startsWith('feedback')) {
+    const stored = global.pendingAnalysis?.[command.channel_id];
     const rest = input.slice(8).trim();
-    const bpmM = rest.match(/bpm[\s:](\d+)/i);
-    const keyM = rest.match(/key[\s:](\w[#b_\w]*)/i);
-    if (bpmM && keyM) {
-      const bpm = parseInt(bpmM[1]), key = keyM[1].replace(/_/g,' ');
-      const stored = global.pendingAnalysis?.[command.channel_id];
-      await send([header('🎚️ Generating Deep Mix Feedback...'), twoCol(`🥁 *BPM*\n${bpm}`, `🎵 *Key*\n${key}`), ctx('⏳')], 'Analyzing');
-      const ctxStr = stored ? `Energy: ${stored.energy}%, Brightness: ${stored.brightness}, Bass: ${stored.bass_ratio}%, LUFS: ${stored.lufs ?? 'unknown'}` : '';
-      const r = await askAI(`Professional mix feedback: BPM ${bpm}, Key ${key}. ${ctxStr}. EQ, compression, arrangement. Real plugin names. Clear sections.`);
+
+    // If audio was scanned in this channel, use that data automatically
+    if (stored) {
+      const desc = rest || 'my track';
+      await send([header('🎚️ Generating Mix Feedback...'), section(`_Analyzing your uploaded track with measured data..._`), ctx('⏳')], 'Analyzing');
+      const hasFull = stored.lufs !== undefined;
+      const dataStr = hasFull
+        ? `Energy: ${stored.energy}%, Loudness: ${stored.lufs} LUFS, Stereo Width: ${stored.stereo_width}%, Low: ${stored.low_pct}%, Mid: ${stored.mid_pct}%, High: ${stored.high_pct}%, Brightness: ${stored.brightness}, Vocal Clarity: ${stored.vocal_clarity}%`
+        : `Energy: ${stored.energy}%, Brightness: ${stored.brightness}, Bass: ${stored.bass_ratio}%, Duration: ${stored.duration}s`;
+      const prompt = `Professional mastering engineer. Here is MEASURED audio analysis data for "${stored.filename}":
+${dataStr}
+${desc !== 'my track' ? `Producer notes: "${desc}"` : ''}
+Give specific mix feedback based on these exact measurements:
+1. Loudness & dynamics — is it loud enough? Needs compression?
+2. Frequency balance — based on the low/mid/high data
+3. Stereo field — is the width good or needs widening/narrowing?
+4. Top 3 specific things to fix with real plugin names and exact settings
+Be direct and specific. Use the actual numbers.`;
+      const r = await askAI(prompt);
       if (global.pendingAnalysis?.[command.channel_id]) delete global.pendingAnalysis[command.channel_id];
-      const bl = [header('🎛️ Deep Mix Feedback'), twoCol(`🥁 *BPM*\n${bpm}`, `🎵 *Key*\n${key}`)];
-      if (stored) {
-        if (stored.lufs !== undefined) bl.push(twoCol(`🔊 *Loudness*\n${loudnessLabel(stored.lufs)}`, `🎚️ *Stereo*\n${stored.stereo_width || '—'}%`));
-        else bl.push(twoCol(`⚡ *Energy*\n${stored.energy}%`, `🔊 *Bass*\n${stored.bass_ratio}%`));
+      const bl = [
+        header('🎛️ Mix Feedback'),
+        section(`*${stored.filename}*`),
+        divider(),
+      ];
+      if (hasFull) {
+        bl.push(twoCol(`🔊 *Loudness*\n${loudnessLabel(stored.lufs)}`, `🎚️ *Stereo Width*\n${stored.stereo_width}%`));
+        bl.push(twoCol(`📊 *Low / Mid / High*\n${stored.low_pct}% / ${stored.mid_pct}% / ${stored.high_pct}%`, `⚡ *Energy*\n${stored.energy}%`));
+      } else {
+        bl.push(twoCol(`⚡ *Energy*\n${stored.energy}%`, `🔊 *Bass*\n${stored.bass_ratio}%`));
       }
       bl.push(divider(), section(r || 'Error'), ctx('Type `/wavmind compare` to compare with a reference track'));
       await send(bl, 'Feedback');
       return;
     }
-    if (!rest) { await send([header('🎚️ Mix Feedback'), section('Describe your mix:\n\n`/wavmind feedback my trap beat at 140bpm feels muddy`\n\n*After uploading audio:*\n`/wavmind feedback bpm:140 key:F_minor`')], 'Feedback'); return; }
+
+    // No scan data — use text description
+    if (!rest) {
+      await send([
+        header('🎚️ Mix Feedback'),
+        section('*Two ways to get feedback:*\n\n*1. Upload audio first (recommended)*\n   Upload any MP3 or WAV → Wavmind scans it → then type `/wavmind feedback`\n\n*2. Describe your mix*\n   `/wavmind feedback my trap beat feels muddy and lacks punch`'),
+        ctx('Audio upload gives much more specific feedback based on real measurements'),
+      ], 'Feedback');
+      return;
+    }
     await send([header('🎚️ Analyzing...'), section(`_"${rest}"_`), ctx('⏳')], 'Analyzing');
-    const r = await askAI(`Professional mixing feedback for: "${rest}". EQ, compression, stereo width, frequency balance. Clear sections with emojis.`);
-    await send([header('🎚️ Mix Feedback'), section(`_${rest}_`), divider(), section(r || 'Error'), ctx('Upload MP3/WAV then `/wavmind feedback bpm:140 key:F_minor` for deeper analysis')], 'Feedback');
+    const r = await askAI(`Professional mixing engineer. Give specific feedback for: "${rest}". Cover: EQ, compression, stereo, loudness, arrangement. Use real plugin names and specific Hz/dB values. Format with emojis.`);
+    await send([header('🎚️ Mix Feedback'), section(`_${rest}_`), divider(), section(r || 'Error'), ctx('💡 Upload your MP3/WAV first for deeper analysis based on real measurements')], 'Feedback');
     return;
   }
 
