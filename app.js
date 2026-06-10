@@ -122,6 +122,29 @@ const btn     = (text, actionId, style) => {
 const actions = btns => ({ type: 'actions', elements: btns });
 
 // ─── LOUDNESS HELPERS ─────────────────────────────────────
+function vocalClarityLabel(vc) {
+  if (vc === undefined || vc === null) return '—';
+  if (vc >= 75) return `${vc}% — Very clear vocals ✅`;
+  if (vc >= 55) return `${vc}% — Good vocal presence ✅`;
+  if (vc >= 35) return `${vc}% — Moderate vocal clarity`;
+  if (vc >= 15) return `${vc}% — Vocals need presence boost`;
+  return `${vc}% — Very low vocal clarity`;
+}
+
+function freqLabel(low, mid, high) {
+  const issues = [];
+  if (low > 60) issues.push('🔴 Bass-heavy');
+  else if (low < 20) issues.push('🔵 Thin bass');
+  else issues.push('✅ Bass OK');
+  if (mid < 35) issues.push('🔴 Hollow mids');
+  else if (mid > 65) issues.push('⚠️ Muddy mids');
+  else issues.push('✅ Mids OK');
+  if (high < 5) issues.push('🔴 Dull/dark');
+  else if (high > 25) issues.push('⚠️ Harsh highs');
+  else issues.push('✅ Highs OK');
+  return issues.join(' · ');
+}
+
 function loudnessLabel(lufs) {
   if (lufs === undefined || lufs === null) return '— LUFS';
   if (lufs > -7)  return `${lufs} LUFS — very loud / over-compressed`;
@@ -263,35 +286,32 @@ async function getArtistStats(name) {
 }
 
 // ─── SPOTIFY NEW RELEASES ─────────────────────────────────
-async function getNewReleases() {
+async function getNewReleases(genre) {
   try {
     const token = await getSpotifyToken();
-    const r = await axios.get('https://api.spotify.com/v1/browse/new-releases', {
-      headers: { Authorization: `Bearer ${token}` },
-      params: { limit: 10 },
-    });
-    return (r.data.albums?.items || []).slice(0, 8).map(a => ({
-      name: a.name,
-      artist: a.artists.map(x => x.name).join(', '),
-      releaseDate: a.release_date,
-      type: a.album_type,
-      url: a.external_urls?.spotify || '',
-    }));
-  } catch (e) { console.error('New releases:', e.message); return null; }
-}
-
-async function searchNewReleasesByGenre(genre) {
-  try {
-    const token = await getSpotifyToken();
-    // Search recent tracks for this genre
     const year = new Date().getFullYear();
+    const q = genre ? `${genre} year:${year}` : `year:${year} tag:new`;
     const r = await axios.get('https://api.spotify.com/v1/search', {
       headers: { Authorization: `Bearer ${token}` },
-      params: { q: `${genre} year:${year}`, type: 'track', limit: 8, market: 'US' },
+      params: { q, type: 'track', limit: 10, market: 'US' },
     });
     const tracks = r.data.tracks?.items || [];
-    if (!tracks.length) return null;
-    return tracks.map(t => ({
+    if (!tracks.length) {
+      // fallback: search for popular recent music
+      const fb = await axios.get('https://api.spotify.com/v1/search', {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { q: genre || 'new music 2025', type: 'track', limit: 10, market: 'US' },
+      });
+      return (fb.data.tracks?.items || []).slice(0, 8).map(t => ({
+        name: t.name,
+        artist: t.artists.map(x => x.name).join(', '),
+        album: t.album?.name || '',
+        releaseDate: t.album?.release_date || '',
+        url: t.external_urls?.spotify || '',
+        popularity: t.popularity || 0,
+      }));
+    }
+    return tracks.slice(0, 8).map(t => ({
       name: t.name,
       artist: t.artists.map(x => x.name).join(', '),
       album: t.album?.name || '',
@@ -299,7 +319,11 @@ async function searchNewReleasesByGenre(genre) {
       url: t.external_urls?.spotify || '',
       popularity: t.popularity || 0,
     }));
-  } catch (e) { console.error('Genre releases:', e.message); return null; }
+  } catch (e) { console.error('New releases:', e.message); return null; }
+}
+
+async function searchNewReleasesByGenre(genre) {
+  return getNewReleases(genre);
 }
 
 // ─── DAW GURU ─────────────────────────────────────────────
@@ -429,6 +453,282 @@ app.action('quick_feedback', async ({ body, ack, client }) => {
     section('*If you just uploaded audio:*\nType `/wavmind feedback` — Wavmind uses your scan data automatically.\n\n*No upload yet?*\nType `/wavmind feedback` + describe your mix:\n`/wavmind feedback my trap beat feels muddy and lacks punch`'),
     ctx('💡 Upload audio first for feedback based on real measurements'),
   ]});
+});
+
+// ─── DAW GURU BUTTON HANDLERS ────────────────────────────
+// DAW selection buttons
+const DAW_BUTTONS = ['FL Studio','Ableton Live','Logic Pro','Pro Tools','Cubase','Studio One','GarageBand','Reaper','Bitwig'];
+const LEVEL_BUTTONS = ['beginner','intermediate','advanced','professional'];
+const FOCUS_BUTTONS = ['Mixing','Sound Design','Arrangement','Beat Making','Mastering','Melody Writing','Bass Design','General'];
+
+function getGuruDAWBlocks() {
+  return [
+    header('🎓 Welcome to DAW Guru!'),
+    section('Your personal AI music tutor. Get *daily lessons* tailored to your DAW and skill level — sent to your DMs every morning automatically.\n\n*Step 1 — Which DAW do you use?*'),
+    divider(),
+    actions(DAW_BUTTONS.slice(0,4).map(d => btn(d, `guru_daw_${d.toLowerCase().replace(/ /g,'_')}`))),
+    actions(DAW_BUTTONS.slice(4).map(d => btn(d, `guru_daw_${d.toLowerCase().replace(/ /g,'_')}`))),
+    ctx('🎓 Tap your DAW to continue'),
+  ];
+}
+
+function getGuruLevelBlocks(daw) {
+  return [
+    header(`🎓 DAW Guru — ${daw} ✅`),
+    section('*Step 2 — What\'s your skill level?*'),
+    divider(),
+    actions([
+      btn('🌱 Beginner', 'guru_level_beginner'),
+      btn('🎚️ Intermediate', 'guru_level_intermediate'),
+    ]),
+    actions([
+      btn('🔥 Advanced', 'guru_level_advanced'),
+      btn('🏆 Professional', 'guru_level_professional'),
+    ]),
+    ctx('Beginner = learning basics · Intermediate = making beats · Advanced = pro techniques · Professional = studio level'),
+  ];
+}
+
+function getGuruFocusBlocks(daw, level) {
+  const li = DAW_LEVELS[level] || DAW_LEVELS.intermediate;
+  return [
+    header(`🎓 ${daw} · ${li.emoji} ${li.label} ✅`),
+    section('*Step 3 — What\'s your main focus?*\n_This personalizes every lesson you receive_'),
+    divider(),
+    actions([
+      btn('🎚️ Mixing', 'guru_focus_mixing'),
+      btn('🎛️ Sound Design', 'guru_focus_sound_design'),
+      btn('🎼 Arrangement', 'guru_focus_arrangement'),
+      btn('🥁 Beat Making', 'guru_focus_beat_making'),
+    ]),
+    actions([
+      btn('🔊 Mastering', 'guru_focus_mastering'),
+      btn('🎹 Melody', 'guru_focus_melody'),
+      btn('🎸 Bass Design', 'guru_focus_bass_design'),
+      btn('🎵 General', 'guru_focus_general'),
+    ]),
+  ];
+}
+
+function getGuruActiveBlocks(p) {
+  const li = DAW_LEVELS[p.level] || DAW_LEVELS.intermediate;
+  return [
+    header('🎓 DAW Guru — Active'),
+    twoCol(`🎛️ *DAW*\n${p.daw}`, `${li.emoji} *Level*\n${li.label}`),
+    twoCol(`🎯 *Focus*\n${p.style || 'General'}`, `📖 *Lessons*\n${p.tipsCount || 0} received`),
+    divider(),
+    actions([
+      btn('🎓 Get Lesson Now', 'guru_tip_now', 'primary'),
+      btn('⚙️ Change Settings', 'guru_restart'),
+      btn('⏸️ Pause', 'guru_stop'),
+    ]),
+    ctx(`📅 Daily lessons at 9am · Type \`/wavmind guru\` to manage`),
+  ];
+}
+
+// Register all DAW buttons
+DAW_BUTTONS.forEach(daw => {
+  const actionId = `guru_daw_${daw.toLowerCase().replace(/ /g,'_')}`;
+  app.action(actionId, async ({ body, ack, client }) => {
+    await ack();
+    const userId = body.user.id;
+    if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
+    global.dawGuruProfiles[userId].daw = daw;
+    global.dawGuruProfiles[userId].userId = userId;
+    global.dawGuruProfiles[userId].paused = false;
+    saveDawGuru(global.dawGuruProfiles);
+    await client.chat.postMessage({ channel: userId, text: 'DAW Guru', blocks: getGuruLevelBlocks(daw) });
+  });
+});
+
+// Register all level buttons
+LEVEL_BUTTONS.forEach(level => {
+  app.action(`guru_level_${level}`, async ({ body, ack, client }) => {
+    await ack();
+    const userId = body.user.id;
+    if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
+    global.dawGuruProfiles[userId].level = level;
+    saveDawGuru(global.dawGuruProfiles);
+    const daw = global.dawGuruProfiles[userId].daw || 'Your DAW';
+    await client.chat.postMessage({ channel: userId, text: 'DAW Guru', blocks: getGuruFocusBlocks(daw, level) });
+  });
+});
+
+// Register all focus buttons
+['mixing','sound_design','arrangement','beat_making','mastering','melody','bass_design','general'].forEach(focus => {
+  app.action(`guru_focus_${focus}`, async ({ body, ack, client }) => {
+    await ack();
+    const userId = body.user.id;
+    if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
+    const style = focus.replace(/_/g, ' ');
+    global.dawGuruProfiles[userId].style = style;
+    saveDawGuru(global.dawGuruProfiles);
+    const p = global.dawGuruProfiles[userId];
+    const li = DAW_LEVELS[p.level] || DAW_LEVELS.intermediate;
+    // Send completion + first tip
+    await client.chat.postMessage({ channel: userId, text: 'DAW Guru', blocks: [
+      header('🎓 DAW Guru — You\'re All Set! 🎉'),
+      twoCol(`🎛️ *DAW*\n${p.daw}`, `${li.emoji} *Level*\n${li.label}`),
+      twoCol(`🎯 *Focus*\n${style}`, `📅 *Daily lessons*\nEvery morning at 9am`),
+      divider(),
+      section('Daily lessons will arrive in your DMs every morning. Get your *first lesson right now:*'),
+      actions([btn('🎓 Get First Lesson', 'guru_tip_now', 'primary')]),
+    ]});
+  });
+});
+
+// Tip/lesson now button
+app.action('guru_tip_now', async ({ body, ack, client }) => {
+  await ack();
+  const userId = body.user.id;
+  const p = global.dawGuruProfiles[userId];
+  if (!p?.daw || !p?.level) {
+    await client.chat.postMessage({ channel: userId, text: 'Setup', blocks: getGuruDAWBlocks() });
+    return;
+  }
+  const tip = await getDawGuruTip(p.daw, p.level, p.style);
+  const li = DAW_LEVELS[p.level] || DAW_LEVELS.intermediate;
+  if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = p;
+  global.dawGuruProfiles[userId].tipsCount = (p.tipsCount || 0) + 1;
+  global.dawGuruProfiles[userId].lastTip = new Date().toISOString();
+  saveDawGuru(global.dawGuruProfiles);
+  await client.chat.postMessage({ channel: userId, text: 'Lesson', blocks: [
+    header(`🎓 ${p.daw} Lesson — ${li.emoji} ${li.label}`),
+    ...(p.style && p.style !== 'general' ? [section(`🎯 *Focus: ${p.style}*`)] : []),
+    divider(),
+    section(tip || 'Could not generate. Try again.'),
+    divider(),
+    actions([btn('🎓 Another Lesson', 'guru_tip_now'), btn('⚙️ Settings', 'guru_status')]),
+    ctx(`📖 Lesson ${global.dawGuruProfiles[userId].tipsCount} · Daily at 9am`),
+  ]});
+});
+
+// Open guru button (from scan results)
+app.action('guru_open', async ({ body, ack, client }) => {
+  await ack();
+  const userId = body.user.id;
+  const p = global.dawGuruProfiles[userId];
+  if (!p?.daw || !p?.level) {
+    await client.chat.postMessage({ channel: userId, text: 'DAW Guru', blocks: getGuruDAWBlocks() });
+  } else {
+    await client.chat.postMessage({ channel: userId, text: 'DAW Guru', blocks: getGuruActiveBlocks(p) });
+  }
+});
+
+// Pause button
+app.action('guru_stop', async ({ body, ack, client }) => {
+  await ack();
+  const userId = body.user.id;
+  if (global.dawGuruProfiles[userId]) { global.dawGuruProfiles[userId].paused = true; saveDawGuru(global.dawGuruProfiles); }
+  await client.chat.postMessage({ channel: userId, text: 'Paused', blocks: [
+    header('⏸️ DAW Guru Paused'),
+    section('Daily lessons stopped.'),
+    actions([btn('▶️ Resume', 'guru_resume'), btn('🎓 Get Lesson Now', 'guru_tip_now')]),
+  ]});
+});
+
+// Resume button
+app.action('guru_resume', async ({ body, ack, client }) => {
+  await ack();
+  const userId = body.user.id;
+  if (global.dawGuruProfiles[userId]) { global.dawGuruProfiles[userId].paused = false; saveDawGuru(global.dawGuruProfiles); }
+  const p = global.dawGuruProfiles[userId];
+  await client.chat.postMessage({ channel: userId, text: 'Resumed', blocks: getGuruActiveBlocks(p || {}) });
+});
+
+// Status button
+app.action('guru_status', async ({ body, ack, client }) => {
+  await ack();
+  const userId = body.user.id;
+  const p = global.dawGuruProfiles[userId];
+  if (!p?.daw || !p?.level) { await client.chat.postMessage({ channel: userId, text: 'Setup', blocks: getGuruDAWBlocks() }); return; }
+  await client.chat.postMessage({ channel: userId, text: 'Status', blocks: getGuruActiveBlocks(p) });
+});
+
+// Restart/reset button
+app.action('guru_restart', async ({ body, ack, client }) => {
+  await ack();
+  const userId = body.user.id;
+  delete global.dawGuruProfiles[userId];
+  saveDawGuru(global.dawGuruProfiles);
+  await client.chat.postMessage({ channel: userId, text: 'DAW Guru', blocks: getGuruDAWBlocks() });
+});
+
+// ─── PROJECT TRACKER BUTTONS ─────────────────────────────
+app.action('project_list', async ({ body, ack, client }) => {
+  await ack();
+  const userId = body.user.id;
+  const projects = global.userProjects[userId] || [];
+  if (!projects.length) {
+    await client.chat.postMessage({ channel: userId, text: 'Projects', blocks: [
+      header('🎵 No Projects Yet'),
+      section('Start tracking your music projects and get daily reminders.'),
+      actions([btn('➕ Add Project', 'project_add_prompt', 'primary')]),
+    ]});
+    return;
+  }
+  const bl = [header(`🎵 Your Projects (${projects.length})`), divider()];
+  projects.forEach((p, i) => {
+    const age = Math.floor((Date.now() - new Date(p.createdAt)) / (1000*60*60*24));
+    bl.push(section(`${p.done ? '✅' : '🎵'} *${p.name}*
+📅 Day ${age} · ${p.done ? 'Complete' : 'In Progress'}
+${p.notes?.slice(-1)[0] ? `📝 _${p.notes.slice(-1)[0].text}_` : ''}`));
+  });
+  bl.push(divider(), actions([btn('➕ Add Project', 'project_add_prompt', 'primary'), btn('🔄 Refresh', 'project_list')]));
+  await client.chat.postMessage({ channel: userId, text: 'Projects', blocks: bl });
+});
+
+app.action('project_add_prompt', async ({ body, ack, client }) => {
+  await ack();
+  const userId = body.user.id;
+  await client.chat.postMessage({ channel: userId, text: 'Add Project', blocks: [
+    header('➕ Add a Project'),
+    section('Type the command with your project name:'),
+    section('`/wavmind project add Dark Trap EP`\n`/wavmind project add Summer Vibes Beat`\n`/wavmind project add Collab with Ahmed`'),
+    ctx('Wavmind will send daily reminders to keep you on track'),
+  ]});
+});
+
+// New releases button handlers
+app.action('releases_global', async ({ body, ack, client }) => {
+  await ack();
+  const userId = body.user.id;
+  await client.chat.postMessage({ channel: userId, text: 'Fetching...', blocks: [header('🆕 Fetching Latest Releases...'), ctx('⏳')] });
+  const releases = await getNewReleases(null);
+  if (!releases?.length) { await client.chat.postMessage({ channel: userId, text: 'Error', blocks: [header('❗ Could not fetch'), section('Try again shortly.')] }); return; }
+  const bl = [header('🆕 Latest Releases on Spotify'), section(`*${releases.length} fresh tracks*`), divider()];
+  releases.forEach((r, i) => {
+    bl.push(section(`*${i+1}. ${r.name}*
+👤 ${r.artist}${r.album ? `  💿 ${r.album}` : ''}  📅 ${r.releaseDate}  🔥 ${r.popularity}%
+🎵 *<${r.url}|▶ Listen on Spotify>*`));
+    if (i < releases.length - 1) bl.push(divider());
+  });
+  bl.push(divider(), actions([
+    btn('🎵 Trap', 'releases_trap'), btn('🎵 Pop', 'releases_pop'),
+    btn('🎵 R&B', 'releases_rnb'), btn('🔄 Refresh', 'releases_global'),
+  ]));
+  await client.chat.postMessage({ channel: userId, text: 'New Releases', blocks: bl });
+});
+
+['trap','pop','rnb','hiphop','afrobeats','drill'].forEach(genre => {
+  app.action(`releases_${genre}`, async ({ body, ack, client }) => {
+    await ack();
+    const userId = body.user.id;
+    await client.chat.postMessage({ channel: userId, text: 'Fetching...', blocks: [header(`🆕 Fetching ${genre} releases...`), ctx('⏳')] });
+    const releases = await getNewReleases(genre);
+    if (!releases?.length) { await client.chat.postMessage({ channel: userId, text: 'Error', blocks: [header('❗ No results'), section(`No recent ${genre} found.`)] }); return; }
+    const bl = [header(`🆕 New ${genre.toUpperCase()} Releases`), divider()];
+    releases.forEach((r, i) => {
+      bl.push(section(`*${i+1}. ${r.name}*
+👤 ${r.artist}  🔥 ${r.popularity}%
+🎵 *<${r.url}|▶ Listen>*`));
+      if (i < releases.length - 1) bl.push(divider());
+    });
+    bl.push(divider(), actions([
+      btn('🌍 All Genres', 'releases_global'), btn('🔄 More', `releases_${genre}`),
+    ]));
+    await client.chat.postMessage({ channel: userId, text: 'Releases', blocks: bl });
+  });
 });
 
 // ─── APP HOME ─────────────────────────────────────────────
@@ -624,9 +924,10 @@ Give specific EQ, compression fixes. Top 3 changes. Real plugin names.`;
     const bl = [header('🎛️ Scan Complete'), section(`*${file.name}*`), divider()];
 
     if (hasFull) {
-      bl.push(twoCol(`🔊 *Loudness*\n${loudnessLabel(a.lufs)}`, `🎚️ *Stereo Width*\n${a.stereo_width}%`));
-      bl.push(twoCol(`📊 *Low / Mid / High*\n${a.low_pct}% / ${a.mid_pct}% / ${a.high_pct}%`, `🎤 *Vocal Clarity*\n${a.vocal_clarity}%`));
-      bl.push(twoCol(`⚡ *Energy*\n${a.energy}%`, `🌈 *Brightness*\n${a.brightness}`));
+      bl.push(twoCol(`🔊 *Loudness*\n${loudnessLabel(a.lufs)}`, `🎚️ *Stereo Width*\n${a.stereo_width}% ${a.stereo_width < 15 ? '— Narrow (mono-like)' : a.stereo_width > 60 ? '— Wide ✅' : '— Normal'}`));
+      bl.push(twoCol(`📊 *Frequency Balance*\n🟥 Low: ${a.low_pct}%  🟩 Mid: ${a.mid_pct}%  🟦 High: ${a.high_pct}%`, `🎤 *Vocal Clarity*\n${vocalClarityLabel(a.vocal_clarity)}`));
+      bl.push(twoCol(`⚡ *Energy*\n${a.energy}% ${a.energy < 40 ? '— Lacks punch' : a.energy > 80 ? '— Very punchy ✅' : '— Good'}`, `🌈 *Brightness*\n${a.brightness}`));
+      bl.push(section(`📋 *Frequency Analysis:* ${freqLabel(a.low_pct, a.mid_pct, a.high_pct)}`));
     } else {
       const mins = Math.floor(a.duration/60), secs = String(a.duration%60).padStart(2,'0');
       const issues = [];
@@ -638,7 +939,13 @@ Give specific EQ, compression fixes. Top 3 changes. Real plugin names.`;
       if (issues.length) bl.push(divider(), section(`*Quick Insights:*\n${issues.join('\n')}`));
     }
 
-    bl.push(divider(), section('*What next?*'), actions([btn('🎚️ Get Mix Feedback', 'quick_feedback', 'primary'), btn('🆚 Compare with Reference', 'quick_compare')]), ctx('🤖 I\'ll DM you a follow-up reminder tomorrow'));
+    bl.push(
+      divider(),
+      section('*What would you like to do?*'),
+      actions([btn('🎚️ Get Mix Feedback', 'quick_feedback', 'primary'), btn('🆚 Compare with Reference', 'quick_compare')]),
+      actions([btn('🆕 New Releases', 'releases_global'), btn('🎓 DAW Guru', 'guru_open'), btn('📌 My Projects', 'project_list')]),
+      ctx('🤖 I\'ll DM you a follow-up reminder tomorrow')
+    );
     await post(bl, 'Scan complete');
     if (userId) { try { await publishAppHome(client, userId); } catch(e){} }
 
@@ -1148,14 +1455,20 @@ Be direct and specific. Use the actual numbers.`;
       bl.push(section(`*${i+1}. ${rel.name}*\n👤 ${rel.artist}${rel.album ? `\n💿 ${rel.album}` : ''}  ${date}${pop}\n🎵 *<${rel.url}|▶ Listen on Spotify>*`));
       if (i < releases.length - 1) bl.push(divider());
     });
-    bl.push(divider(), ctx('🎵 Spotify · Updated daily'));
+    bl.push(divider(), actions([
+      btn('🎵 Trap', 'releases_trap'), btn('🎵 Pop', 'releases_pop'),
+      btn('🎵 R&B', 'releases_rnb'), btn('🎵 Hip-Hop', 'releases_hiphop'),
+      btn('🔄 Refresh', 'releases_global'),
+    ]), ctx('🎵 Spotify · Tap a genre for more'));
     await send(bl, 'New Releases');
     return;
   }
 
   // ── DAW GURU ──────────────────────────────────────────
-  if (lower.startsWith('dawguru') || lower.startsWith('daw guru')) {
-    const sub = input.replace(/^daw\s*guru\s*/i, '').trim().toLowerCase();
+  // Short alias: /wavmind guru = /wavmind daw guru
+  const isGuruCmd = lower.startsWith('dawguru') || lower.startsWith('daw guru') || lower.startsWith('guru');
+  if (isGuruCmd) {
+    const sub = input.replace(/^(daw\s*guru|guru)\s*/i, '').trim().toLowerCase();
     const p = global.dawGuruProfiles[userId] || {};
 
     // SMART ONBOARDING: if not set up, guide step by step
@@ -1163,27 +1476,26 @@ Be direct and specific. Use the actual numbers.`;
       if (!p.daw && !p.level) {
         await send([
           header('🎓 Welcome to DAW Guru!'),
-          section('Your personal AI music tutor. Get *daily lessons* tailored to your DAW and skill level — sent automatically every morning.\n\n*Let\'s get you set up in 3 steps:*'),
+          section('Your personal AI music tutor. Get *daily lessons* tailored to your DAW and skill level — sent to your DMs every morning automatically.\n\n*3 quick steps to set up:*'),
           divider(),
-          section('*Step 1 of 3 — Which DAW do you use?*\nReply with your DAW name:\n\nFL Studio · Ableton Live · Logic Pro · Pro Tools\nCubase · Studio One · GarageBand · Reaper · Bitwig'),
-          section('Example: `/wavmind daw guru set daw FL Studio`'),
-          ctx('🎓 DAW Guru · Daily personalized lessons · Fully autonomous'),
+          section('*Step 1 — Which DAW do you use?*\n\n`/wavmind guru FL Studio`\n`/wavmind guru Ableton Live`\n`/wavmind guru Logic Pro`\n`/wavmind guru Pro Tools`\n`/wavmind guru Cubase`\n`/wavmind guru Studio One`'),
+          ctx('🎓 Just type your DAW name after /wavmind guru'),
         ], 'DAW Guru');
       } else if (p.daw && !p.level) {
         await send([
           header(`🎓 DAW Guru — ${p.daw} ✅`),
-          section('*Step 2 of 3 — What\'s your skill level?*'),
+          section('*Step 2 — What\'s your skill level?*'),
           divider(),
-          section('🌱 *Beginner* — Just started, learning the basics\n🎚️ *Intermediate* — Making beats, want to improve\n🔥 *Advanced* — Experienced, want pro techniques\n🏆 *Professional* — Studio-level, want expert tips'),
-          section('Example: `/wavmind daw guru set level intermediate`'),
+          section('`/wavmind guru beginner` — Just starting out\n`/wavmind guru intermediate` — Making beats, want to improve\n`/wavmind guru advanced` — Experienced producer\n`/wavmind guru professional` — Studio-level work'),
         ], 'DAW Guru');
       } else if (p.daw && p.level && !p.style) {
+        const li3 = DAW_LEVELS[p.level] || DAW_LEVELS.intermediate;
         await send([
-          header(`🎓 DAW Guru — ${p.daw} · ${DAW_LEVELS[p.level]?.label} ✅`),
-          section('*Step 3 of 3 — What\'s your main focus?* (optional but recommended)'),
+          header(`🎓 ${p.daw} · ${li3.emoji} ${li3.label} ✅`),
+          section('*Step 3 — What\'s your main focus?*'),
           divider(),
-          section('🎚️ Mixing · 🎛️ Sound Design · 🎼 Arrangement\n🔊 Mastering · 🎹 Melody Writing · 🥁 Drum Programming\n🎸 Bass Design · 🎤 Vocal Production · 🎵 General Production'),
-          section('Example: `/wavmind daw guru set focus mixing`\n\nOr skip: `/wavmind daw guru skip`'),
+          section('`/wavmind guru mixing`\n`/wavmind guru sound design`\n`/wavmind guru arrangement`\n`/wavmind guru mastering`\n`/wavmind guru beat making`\n`/wavmind guru general`'),
+          section('Or skip to start now: `/wavmind guru skip`'),
         ], 'DAW Guru');
       } else {
         const li = DAW_LEVELS[p.level] || DAW_LEVELS.intermediate;
@@ -1198,9 +1510,66 @@ Be direct and specific. Use the actual numbers.`;
       return;
     }
 
-    // SET DAW
-    if (sub.startsWith('set daw ')) {
-      const daw = input.replace(/^daw\s*guru\s+set\s+daw\s+/i, '').trim();
+    // SMART DETECTION: auto-detect what user typed
+    const knownDAWs = ['fl studio','ableton live','ableton','logic pro','logic','pro tools','cubase','studio one','garageband','reaper','bitwig','reason','fruity loops'];
+    const knownLevels = ['beginner','intermediate','advanced','professional'];
+    const knownFocus = ['mixing','sound design','arrangement','mastering','beat making','general','melody','drums','bass','vocals','composition'];
+    const matchedDAW = knownDAWs.find(d => sub === d || sub.startsWith(d + ' ') || sub === d.split(' ')[0]);
+    const matchedLevel = knownLevels.find(l => sub === l);
+    const matchedFocus = knownFocus.find(f => sub === f || sub.startsWith(f));
+
+    // Auto-route based on profile completion + what was typed
+    if (!sub.startsWith('set ') && !sub.startsWith('tip') && !sub.startsWith('status') && !sub.startsWith('stop') && !sub.startsWith('restart') && !sub.startsWith('skip') && !sub.startsWith('now') && !sub.startsWith('lesson') && !sub.startsWith('pause') && !sub.startsWith('reset') && !sub.startsWith('profile') && !sub.startsWith('focus') && !sub.startsWith('style')) {
+      if (matchedDAW && !p.level) {
+        // Treat as DAW name input → set daw
+        const dawName = knownDAWs.find(d => sub === d || sub.startsWith(d)) || sub;
+        const formatted = dawName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
+        global.dawGuruProfiles[userId].daw = formatted;
+        global.dawGuruProfiles[userId].userId = userId;
+        global.dawGuruProfiles[userId].paused = false;
+        saveDawGuru(global.dawGuruProfiles);
+        await send([
+          header(`✅ DAW Set — ${formatted}`),
+          section('*Step 2 — What\'s your skill level?*\n\n`/wavmind guru beginner`\n`/wavmind guru intermediate`\n`/wavmind guru advanced`\n`/wavmind guru professional`'),
+        ], 'Saved');
+        return;
+      }
+      if (matchedLevel) {
+        // Treat as level input → set level
+        if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
+        global.dawGuruProfiles[userId].level = sub;
+        global.dawGuruProfiles[userId].userId = userId;
+        global.dawGuruProfiles[userId].paused = false;
+        saveDawGuru(global.dawGuruProfiles);
+        const li = DAW_LEVELS[sub];
+        const daw = global.dawGuruProfiles[userId].daw || 'your DAW';
+        await send([
+          header(`✅ Level Set — ${li.emoji} ${li.label}`),
+          section('*Step 3 — What\'s your main focus?*\n\n`/wavmind guru mixing`\n`/wavmind guru sound design`\n`/wavmind guru arrangement`\n`/wavmind guru beat making`\n`/wavmind guru general`\n\nOr skip: `/wavmind guru skip`'),
+        ], 'Saved');
+        return;
+      }
+      if (matchedFocus && p.daw && p.level) {
+        // Treat as focus input → set focus
+        if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
+        global.dawGuruProfiles[userId].style = sub;
+        saveDawGuru(global.dawGuruProfiles);
+        const daw = global.dawGuruProfiles[userId].daw;
+        const lvl = DAW_LEVELS[global.dawGuruProfiles[userId].level]?.label || 'Intermediate';
+        await send([
+          header('🎓 DAW Guru — You\'re All Set!'),
+          section(`*${daw}* · *${lvl}* · *${sub}*\n\nDaily lessons start tomorrow at 9am. Get your first one now:`),
+          section('`/wavmind guru tip`'),
+          ctx('🤖 Autonomous · Daily DMs · Personalized to you'),
+        ], 'Setup complete');
+        return;
+      }
+    }
+
+    // SET DAW (explicit)
+    if (sub.startsWith('set daw ') || sub.startsWith('daw ')) {
+      const daw = sub.replace(/^(set\s+daw|daw)\s+/i, '').trim() || input.replace(/^(daw\s*guru|guru)\s+(set\s+daw|daw)\s+/i, '').trim();
       if (!daw) { await send([header('❗ Which DAW?'), section('Example: `/wavmind daw guru set daw FL Studio`')], 'Missing'); return; }
       if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
       global.dawGuruProfiles[userId].daw = daw;
@@ -1211,7 +1580,7 @@ Be direct and specific. Use the actual numbers.`;
       if (!global.dawGuruProfiles[userId].level) {
         await send([
           header(`✅ DAW Set — ${daw}`),
-          section('*Step 2 of 3 — What\'s your skill level?*\n\n`/wavmind daw guru set level beginner`\n`/wavmind daw guru set level intermediate`\n`/wavmind daw guru set level advanced`\n`/wavmind daw guru set level professional`'),
+          section('*Step 2 — What\'s your skill level?*\n\n`/wavmind guru beginner`\n`/wavmind guru intermediate`\n`/wavmind guru advanced`\n`/wavmind guru professional`'),
         ], 'Saved');
       } else {
         await send([header('✅ DAW Updated'), section(`*${daw}* saved. Type \`/wavmind daw guru tip\` to get a lesson now.`)], 'Saved');
@@ -1221,7 +1590,7 @@ Be direct and specific. Use the actual numbers.`;
 
     // SET LEVEL
     if (sub.startsWith('set level ')) {
-      const lvl = sub.replace('set level ', '').trim();
+      const lvl = sub.replace(/^set\s+level\s+/i, '').trim();
       if (!DAW_LEVELS[lvl]) { await send([header('❗ Invalid Level'), section('Use: `beginner` · `intermediate` · `advanced` · `professional`')], 'Invalid'); return; }
       if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
       global.dawGuruProfiles[userId].level = lvl;
@@ -1233,7 +1602,7 @@ Be direct and specific. Use the actual numbers.`;
       if (!global.dawGuruProfiles[userId].style) {
         await send([
           header(`✅ Level Set — ${li.emoji} ${li.label}`),
-          section('*Step 3 of 3 — What\'s your main focus?* (optional)\n\n`/wavmind daw guru set focus mixing`\n`/wavmind daw guru set focus sound design`\n`/wavmind daw guru set focus arrangement`\n`/wavmind daw guru set focus general`\n\nOr skip: `/wavmind daw guru skip`'),
+          section('*Step 3 — What\'s your main focus?*\n\n`/wavmind guru mixing`\n`/wavmind guru sound design`\n`/wavmind guru arrangement`\n`/wavmind guru beat making`\n`/wavmind guru general`\n\nOr skip: `/wavmind guru skip`'),
         ], 'Saved');
       } else {
         await send([header(`✅ Level Updated — ${li.emoji} ${li.label}`), section(`Daily ${daw} tips now calibrated for *${li.label}* level.`)], 'Saved');
@@ -1242,8 +1611,8 @@ Be direct and specific. Use the actual numbers.`;
     }
 
     // SET FOCUS / STYLE
-    if (sub.startsWith('set focus ') || sub.startsWith('set style ')) {
-      const style = input.replace(/^daw\s*guru\s+set\s+(focus|style)\s+/i, '').trim();
+    if (sub.startsWith('set focus ') || sub.startsWith('set style ') || sub.startsWith('focus ') || sub.startsWith('style ')) {
+      const style = sub.replace(/^(set\s+)?(focus|style)\s+/i, '').trim();
       if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
       global.dawGuruProfiles[userId].style = style;
       saveDawGuru(global.dawGuruProfiles);
@@ -1291,7 +1660,7 @@ Be direct and specific. Use the actual numbers.`;
         twoCol(`🎯 *Focus*\n${p.style || 'General'}`, `📅 *Status*\n${p.paused ? '⏸️ Paused' : '✅ Active'}`),
         twoCol(`📖 *Lessons received*\n${p.tipsCount || 0}`, `🕐 *${nextTip}*\n`),
         divider(),
-        section('`/wavmind daw guru tip` — Get a lesson now\n`/wavmind daw guru stop` — Pause\n`/wavmind daw guru restart` — Reset settings'),
+        section('`/wavmind guru tip` — Lesson now\n`/wavmind guru stop` — Pause\n`/wavmind guru restart` — Reset'),
       ], 'Profile');
       return;
     }
@@ -1299,14 +1668,14 @@ Be direct and specific. Use the actual numbers.`;
     // STOP
     if (sub === 'stop' || sub === 'pause') {
       if (global.dawGuruProfiles[userId]) { global.dawGuruProfiles[userId].paused = true; saveDawGuru(global.dawGuruProfiles); }
-      await send([header('⏸️ DAW Guru Paused'), section('Daily lessons stopped.\n\n`/wavmind daw guru tip` — Get a lesson anytime\n`/wavmind daw guru` — Resume setup')], 'Paused');
+      await send([header('⏸️ DAW Guru Paused'), section('Daily lessons stopped.\n\n`/wavmind guru tip` — Get a lesson anytime\n`/wavmind guru` — Resume')], 'Paused');
       return;
     }
 
     // TIP / LESSON NOW
     if (sub === 'tip' || sub === 'now' || sub === 'lesson') {
       if (!p.daw || !p.level) {
-        await send([header('🎓 Set Up DAW Guru First'), section('Type `/wavmind daw guru` to get started in 3 steps.')], 'Setup needed');
+        await send([header('🎓 Set Up DAW Guru First'), section('Type `/wavmind guru` to get started — takes 30 seconds.')], 'Setup needed');
         return;
       }
       await send([header(`🎓 Getting Your ${p.daw} Lesson...`), ctx('⏳ Generating personalized lesson')], 'Loading');
@@ -1330,7 +1699,7 @@ Be direct and specific. Use the actual numbers.`;
     }
 
     // Default — show status or prompt setup
-    await send([header('🎓 DAW Guru'), section('`/wavmind daw guru` — Setup or status\n`/wavmind daw guru tip` — Get a lesson now\n`/wavmind daw guru stop` — Pause daily lessons')], 'DAW Guru');
+    await send([header('🎓 DAW Guru'), section('`/wavmind guru` — Setup or status\n`/wavmind guru tip` — Lesson now\n`/wavmind guru stop` — Pause')], 'DAW Guru');
     return;
   }
 
