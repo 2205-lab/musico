@@ -32,7 +32,18 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 // ─── PERSISTENT STORAGE ───────────────────────────────────
 const REMINDERS_FILE = '/tmp/wavmind_reminders.json';
 const STATS_FILE     = '/tmp/wavmind_stats.json';
-const DAW_GURU_FILE  = '/tmp/wavmind_dawguru.json';
+const DAW_GURU_FILE     = '/tmp/wavmind_dawguru.json';
+const PROJECTS_FILE    = '/tmp/wavmind_projects.json';
+
+function loadProjects() {
+  try { if (fs.existsSync(PROJECTS_FILE)) return JSON.parse(fs.readFileSync(PROJECTS_FILE, 'utf8')); }
+  catch (e) { console.error('Load projects:', e.message); }
+  return {};
+}
+function saveProjects(data) {
+  try { fs.writeFileSync(PROJECTS_FILE, JSON.stringify(data, null, 2)); }
+  catch (e) { console.error('Save projects:', e.message); }
+}
 
 function loadDawGuru() {
   try { if (fs.existsSync(DAW_GURU_FILE)) return JSON.parse(fs.readFileSync(DAW_GURU_FILE, 'utf8')); }
@@ -66,6 +77,7 @@ function saveStats(data) {
 global.pendingReminders = loadReminders();
 global.weeklyStats      = loadStats();
 global.dawGuruProfiles  = loadDawGuru();
+global.userProjects     = loadProjects();
 global.userUploads      = global.userUploads || {};
 global.samplePageTracker = global.samplePageTracker || {};
 
@@ -251,23 +263,19 @@ async function getArtistStats(name) {
 }
 
 // ─── SPOTIFY NEW RELEASES ─────────────────────────────────
-async function getNewReleases(genre = null) {
+async function getNewReleases() {
   try {
     const token = await getSpotifyToken();
-    // Get new releases
     const r = await axios.get('https://api.spotify.com/v1/browse/new-releases', {
       headers: { Authorization: `Bearer ${token}` },
-      params: { limit: 10, country: 'US' },
+      params: { limit: 10 },
     });
-    const albums = r.data.albums.items;
-    // If genre filter, get audio features to approximate
-    return albums.slice(0, 8).map(a => ({
+    return (r.data.albums?.items || []).slice(0, 8).map(a => ({
       name: a.name,
       artist: a.artists.map(x => x.name).join(', '),
       releaseDate: a.release_date,
       type: a.album_type,
-      url: a.external_urls.spotify,
-      image: a.images?.[1]?.url || a.images?.[0]?.url || null,
+      url: a.external_urls?.spotify || '',
     }));
   } catch (e) { console.error('New releases:', e.message); return null; }
 }
@@ -275,19 +283,21 @@ async function getNewReleases(genre = null) {
 async function searchNewReleasesByGenre(genre) {
   try {
     const token = await getSpotifyToken();
-    // Search for recent tracks in this genre
+    // Search recent tracks for this genre
+    const year = new Date().getFullYear();
     const r = await axios.get('https://api.spotify.com/v1/search', {
       headers: { Authorization: `Bearer ${token}` },
-      params: { q: `genre:${genre} year:2025-2026`, type: 'track', limit: 8, market: 'US' },
+      params: { q: `${genre} year:${year}`, type: 'track', limit: 8, market: 'US' },
     });
     const tracks = r.data.tracks?.items || [];
+    if (!tracks.length) return null;
     return tracks.map(t => ({
       name: t.name,
       artist: t.artists.map(x => x.name).join(', '),
-      album: t.album.name,
-      releaseDate: t.album.release_date,
-      url: t.external_urls.spotify,
-      popularity: t.popularity,
+      album: t.album?.name || '',
+      releaseDate: t.album?.release_date || '',
+      url: t.external_urls?.spotify || '',
+      popularity: t.popularity || 0,
     }));
   } catch (e) { console.error('Genre releases:', e.message); return null; }
 }
@@ -747,6 +757,45 @@ function startScheduler(client) {
   next9am.setHours(9, 0, 0, 0);
   setTimeout(() => { sendDawGuruTips(); setInterval(sendDawGuruTips, 24 * 60 * 60 * 1000); }, next9am - nowDG);
   console.log(`🎓 DAW Guru tips scheduled for ${next9am.toLocaleString()}`);
+
+  // Project reminders — daily at 10am
+  const sendProjectReminders = async () => {
+    try {
+      for (const userId of Object.keys(global.userProjects)) {
+        const projects = global.userProjects[userId].filter(p => !p.done && p.reminders);
+        if (!projects.length) continue;
+        for (const proj of projects) {
+          const days = Math.floor((Date.now() - new Date(proj.createdAt)) / (1000*60*60*24));
+          const lastUpdated = proj.lastUpdated ? Math.floor((Date.now() - new Date(proj.lastUpdated)) / (1000*60*60*24)) : days;
+          // Only remind if not updated in 2+ days
+          if (lastUpdated < 2) continue;
+          console.log(`📌 Project reminder → ${userId} "${proj.name}"`);
+          const motivation = await askAI(`Music producer has been working on "${proj.name}" for ${days} days. Give one specific motivational tip or next step to help them progress. Under 30 words. Direct and actionable.`);
+          await client.chat.postMessage({
+            channel: userId,
+            text: 'Project reminder',
+            blocks: [
+              header('📌 Project Check-in'),
+              section(`*"${proj.name}"*
+📅 Day ${days} · Last update: ${lastUpdated} days ago`),
+              divider(),
+              section(motivation || 'Keep going! Every session moves the project forward.'),
+              divider(),
+              section(`\`/wavmind project update ${proj.name} | [what you did]\` — Log progress\n\`/wavmind project done ${proj.name}\` — Mark complete`),
+              ctx('📌 Project tracker · Type `/wavmind project list` to see all'),
+            ],
+          });
+        }
+      }
+    } catch (e) { console.error('Project reminders:', e.message); }
+  };
+
+  // Schedule project reminders daily at 10am
+  const next10am = new Date();
+  next10am.setDate(next10am.getDate() + (new Date().getHours() >= 10 ? 1 : 0));
+  next10am.setHours(10, 0, 0, 0);
+  setTimeout(() => { sendProjectReminders(); setInterval(sendProjectReminders, 24*60*60*1000); }, next10am - new Date());
+  console.log(`📌 Project reminders scheduled for ${next10am.toLocaleString()}`);
 }
 
 // ─── MCP SERVER ───────────────────────────────────────────
@@ -973,7 +1022,7 @@ Be direct and specific. Use the actual numbers.`;
   }
 
   // ── DAW ───────────────────────────────────────────────
-  if (lower.startsWith('daw')) {
+  if (lower.startsWith('daw') && !lower.startsWith('daw guru') && !lower.startsWith('dawguru')) {
     const dawInput = input.slice(3).trim();
     if (!dawInput) { await send([header('🎸 DAW Help'), section('`/wavmind daw fl studio sidechain 808`\n`/wavmind daw ableton warp audio`\n`/wavmind daw logic pro flex pitch`\n`/wavmind daw pro tools set up sessions`'), ctx('FL Studio · Ableton · Logic Pro · Pro Tools · Cubase · Studio One · GarageBand · Reaper · Bitwig')], 'DAW'); return; }
     const dawList = [
@@ -1107,34 +1156,70 @@ Be direct and specific. Use the actual numbers.`;
   // ── DAW GURU ──────────────────────────────────────────
   if (lower.startsWith('dawguru') || lower.startsWith('daw guru')) {
     const sub = input.replace(/^daw\s*guru\s*/i, '').trim().toLowerCase();
+    const p = global.dawGuruProfiles[userId] || {};
 
-    if (!sub || sub === 'setup' || sub === 'start') {
-      await send([
-        header('🎓 DAW Guru Setup'),
-        section('Get *daily personalized DAW tips* based on your skill level.\n\nWavmind DMs you every day at 9am automatically.'),
-        divider(),
-        section('*Step 1 — Set your DAW:*\n`/wavmind daw guru set daw FL Studio`\n`/wavmind daw guru set daw Ableton Live`\n`/wavmind daw guru set daw Logic Pro`\n`/wavmind daw guru set daw Pro Tools`'),
-        section('*Step 2 — Set your level:*\n`/wavmind daw guru set level beginner`\n`/wavmind daw guru set level intermediate`\n`/wavmind daw guru set level advanced`\n`/wavmind daw guru set level professional`'),
-        section('*Optional focus:*\n`/wavmind daw guru set focus mixing`\n`/wavmind daw guru set focus sound design`\n`/wavmind daw guru set focus arrangement`\n`/wavmind daw guru set focus bass design`'),
-        divider(),
-        section('*Commands:*\n`/wavmind daw guru tip` — Get a tip now\n`/wavmind daw guru status` — Your profile\n`/wavmind daw guru stop` — Pause tips'),
-        ctx('🤖 Autonomous · Daily 9am DMs · Fully personalized'),
-      ], 'DAW Guru');
+    // SMART ONBOARDING: if not set up, guide step by step
+    if (!sub || sub === 'setup' || sub === 'start' || sub === 'help') {
+      if (!p.daw && !p.level) {
+        await send([
+          header('🎓 Welcome to DAW Guru!'),
+          section('Your personal AI music tutor. Get *daily lessons* tailored to your DAW and skill level — sent automatically every morning.\n\n*Let\'s get you set up in 3 steps:*'),
+          divider(),
+          section('*Step 1 of 3 — Which DAW do you use?*\nReply with your DAW name:\n\nFL Studio · Ableton Live · Logic Pro · Pro Tools\nCubase · Studio One · GarageBand · Reaper · Bitwig'),
+          section('Example: `/wavmind daw guru set daw FL Studio`'),
+          ctx('🎓 DAW Guru · Daily personalized lessons · Fully autonomous'),
+        ], 'DAW Guru');
+      } else if (p.daw && !p.level) {
+        await send([
+          header(`🎓 DAW Guru — ${p.daw} ✅`),
+          section('*Step 2 of 3 — What\'s your skill level?*'),
+          divider(),
+          section('🌱 *Beginner* — Just started, learning the basics\n🎚️ *Intermediate* — Making beats, want to improve\n🔥 *Advanced* — Experienced, want pro techniques\n🏆 *Professional* — Studio-level, want expert tips'),
+          section('Example: `/wavmind daw guru set level intermediate`'),
+        ], 'DAW Guru');
+      } else if (p.daw && p.level && !p.style) {
+        await send([
+          header(`🎓 DAW Guru — ${p.daw} · ${DAW_LEVELS[p.level]?.label} ✅`),
+          section('*Step 3 of 3 — What\'s your main focus?* (optional but recommended)'),
+          divider(),
+          section('🎚️ Mixing · 🎛️ Sound Design · 🎼 Arrangement\n🔊 Mastering · 🎹 Melody Writing · 🥁 Drum Programming\n🎸 Bass Design · 🎤 Vocal Production · 🎵 General Production'),
+          section('Example: `/wavmind daw guru set focus mixing`\n\nOr skip: `/wavmind daw guru skip`'),
+        ], 'DAW Guru');
+      } else {
+        const li = DAW_LEVELS[p.level] || DAW_LEVELS.intermediate;
+        await send([
+          header('🎓 DAW Guru — Active'),
+          twoCol(`🎛️ *DAW*\n${p.daw}`, `${li.emoji} *Level*\n${li.label}`),
+          twoCol(`🎯 *Focus*\n${p.style || 'General'}`, `📅 *Lessons*\n${p.paused ? '⏸️ Paused' : 'Daily at 9am'}`),
+          divider(),
+          section('`/wavmind daw guru tip` — Get a lesson now\n`/wavmind daw guru status` — Full profile\n`/wavmind daw guru stop` — Pause\n`/wavmind daw guru restart` — Change settings'),
+        ], 'DAW Guru');
+      }
       return;
     }
 
+    // SET DAW
     if (sub.startsWith('set daw ')) {
       const daw = input.replace(/^daw\s*guru\s+set\s+daw\s+/i, '').trim();
-      if (!daw) { await send([header('❗ Which DAW?'), section('`/wavmind daw guru set daw FL Studio`')], 'Missing'); return; }
+      if (!daw) { await send([header('❗ Which DAW?'), section('Example: `/wavmind daw guru set daw FL Studio`')], 'Missing'); return; }
       if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
       global.dawGuruProfiles[userId].daw = daw;
       global.dawGuruProfiles[userId].userId = userId;
       global.dawGuruProfiles[userId].paused = false;
       saveDawGuru(global.dawGuruProfiles);
-      await send([header('✅ DAW Set'), section(`*${daw}* saved!\n\nNow set your level:\n\`/wavmind daw guru set level beginner\`\n\`/wavmind daw guru set level intermediate\`\n\`/wavmind daw guru set level advanced\``)], 'Saved');
+      // Auto-prompt next step
+      if (!global.dawGuruProfiles[userId].level) {
+        await send([
+          header(`✅ DAW Set — ${daw}`),
+          section('*Step 2 of 3 — What\'s your skill level?*\n\n`/wavmind daw guru set level beginner`\n`/wavmind daw guru set level intermediate`\n`/wavmind daw guru set level advanced`\n`/wavmind daw guru set level professional`'),
+        ], 'Saved');
+      } else {
+        await send([header('✅ DAW Updated'), section(`*${daw}* saved. Type \`/wavmind daw guru tip\` to get a lesson now.`)], 'Saved');
+      }
       return;
     }
 
+    // SET LEVEL
     if (sub.startsWith('set level ')) {
       const lvl = sub.replace('set level ', '').trim();
       if (!DAW_LEVELS[lvl]) { await send([header('❗ Invalid Level'), section('Use: `beginner` · `intermediate` · `advanced` · `professional`')], 'Invalid'); return; }
@@ -1145,61 +1230,204 @@ Be direct and specific. Use the actual numbers.`;
       saveDawGuru(global.dawGuruProfiles);
       const li = DAW_LEVELS[lvl];
       const daw = global.dawGuruProfiles[userId].daw || 'your DAW';
-      await send([
-        header(`✅ Level Set — ${li.emoji} ${li.label}`),
-        section(`*${li.desc}*\n\nYou will now receive daily ${daw} tips at *${li.label}* level.\n\nGet one right now: \`/wavmind daw guru tip\``),
-      ], 'Saved');
+      if (!global.dawGuruProfiles[userId].style) {
+        await send([
+          header(`✅ Level Set — ${li.emoji} ${li.label}`),
+          section('*Step 3 of 3 — What\'s your main focus?* (optional)\n\n`/wavmind daw guru set focus mixing`\n`/wavmind daw guru set focus sound design`\n`/wavmind daw guru set focus arrangement`\n`/wavmind daw guru set focus general`\n\nOr skip: `/wavmind daw guru skip`'),
+        ], 'Saved');
+      } else {
+        await send([header(`✅ Level Updated — ${li.emoji} ${li.label}`), section(`Daily ${daw} tips now calibrated for *${li.label}* level.`)], 'Saved');
+      }
       return;
     }
 
-    if (sub.startsWith('set focus ')) {
-      const focus = input.replace(/^daw\s*guru\s+set\s+focus\s+/i, '').trim();
+    // SET FOCUS / STYLE
+    if (sub.startsWith('set focus ') || sub.startsWith('set style ')) {
+      const style = input.replace(/^daw\s*guru\s+set\s+(focus|style)\s+/i, '').trim();
       if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
-      global.dawGuruProfiles[userId].focus = focus;
+      global.dawGuruProfiles[userId].style = style;
       saveDawGuru(global.dawGuruProfiles);
-      await send([header('✅ Focus Set'), section(`Focus: *${focus}*\n\nYour tips will emphasize ${focus}.`)], 'Saved');
+      const daw = global.dawGuruProfiles[userId].daw || 'your DAW';
+      const lvl = DAW_LEVELS[global.dawGuruProfiles[userId].level]?.label || 'Intermediate';
+      await send([
+        header('🎓 DAW Guru — You\'re All Set!'),
+        section(`*${daw}* · *${lvl}* · *${style}*\n\nYou\'ll receive daily lessons every morning at 9am, tailored exactly to your setup.\n\nGet your first lesson now:`),
+        section('`/wavmind daw guru tip`'),
+        ctx('🤖 Autonomous · Daily 9am DMs · Personalized to you'),
+      ], 'Setup complete');
       return;
     }
 
+    // SKIP focus step
+    if (sub === 'skip') {
+      if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = {};
+      global.dawGuruProfiles[userId].style = 'general production';
+      saveDawGuru(global.dawGuruProfiles);
+      const daw = global.dawGuruProfiles[userId].daw || 'your DAW';
+      await send([
+        header('🎓 DAW Guru — Active!'),
+        section(`Daily *${daw}* lessons start tomorrow at 9am.\n\nGet your first lesson now: \`/wavmind daw guru tip\``),
+        ctx('🤖 Type `/wavmind daw guru stop` to pause anytime'),
+      ], 'Active');
+      return;
+    }
+
+    // RESTART — clear and restart onboarding
+    if (sub === 'restart' || sub === 'reset') {
+      delete global.dawGuruProfiles[userId];
+      saveDawGuru(global.dawGuruProfiles);
+      await send([header('🔄 DAW Guru Reset'), section('Starting fresh!\n\n`/wavmind daw guru` — Set up again')], 'Reset');
+      return;
+    }
+
+    // STATUS
     if (sub === 'status' || sub === 'profile') {
-      const p = global.dawGuruProfiles[userId];
-      if (!p?.daw || !p?.level) { await send([header('❗ Not Set Up'), section('`/wavmind daw guru setup`')], 'Setup needed'); return; }
+      if (!p.daw || !p.level) { await send([header('🎓 Not Set Up Yet'), section('`/wavmind daw guru` — Get started')], 'Not set up'); return; }
       const li = DAW_LEVELS[p.level] || DAW_LEVELS.intermediate;
+      const nextTip = p.lastTip ? `Last lesson: ${new Date(p.lastTip).toLocaleDateString()}` : 'No lessons yet';
       await send([
         header('🎓 Your DAW Guru Profile'),
         twoCol(`🎛️ *DAW*\n${p.daw}`, `${li.emoji} *Level*\n${li.label}`),
-        twoCol(`🎯 *Focus*\n${p.focus || 'General'}`, `📅 *Daily tip*\n${p.paused ? '⏸️ Paused' : '9am every day'}`),
+        twoCol(`🎯 *Focus*\n${p.style || 'General'}`, `📅 *Status*\n${p.paused ? '⏸️ Paused' : '✅ Active'}`),
+        twoCol(`📖 *Lessons received*\n${p.tipsCount || 0}`, `🕐 *${nextTip}*\n`),
         divider(),
-        section('`/wavmind daw guru tip` — Get a tip now\n`/wavmind daw guru set level [level]` — Change level\n`/wavmind daw guru set focus [area]` — Change focus\n`/wavmind daw guru stop` — Pause tips'),
+        section('`/wavmind daw guru tip` — Get a lesson now\n`/wavmind daw guru stop` — Pause\n`/wavmind daw guru restart` — Reset settings'),
       ], 'Profile');
       return;
     }
 
+    // STOP
     if (sub === 'stop' || sub === 'pause') {
       if (global.dawGuruProfiles[userId]) { global.dawGuruProfiles[userId].paused = true; saveDawGuru(global.dawGuruProfiles); }
-      await send([header('⏸️ DAW Guru Paused'), section('Daily tips stopped.\n\n`/wavmind daw guru tip` — Get a tip anytime\n`/wavmind daw guru set level [level]` — Resume')], 'Paused');
+      await send([header('⏸️ DAW Guru Paused'), section('Daily lessons stopped.\n\n`/wavmind daw guru tip` — Get a lesson anytime\n`/wavmind daw guru` — Resume setup')], 'Paused');
       return;
     }
 
-    if (sub === 'tip' || sub === 'now') {
-      const p = global.dawGuruProfiles[userId];
-      if (!p?.daw || !p?.level) {
-        await send([header('🎓 Set Up DAW Guru First'), section('`/wavmind daw guru setup`\n\nSet your DAW and skill level to get personalized tips.')], 'Setup needed');
+    // TIP / LESSON NOW
+    if (sub === 'tip' || sub === 'now' || sub === 'lesson') {
+      if (!p.daw || !p.level) {
+        await send([header('🎓 Set Up DAW Guru First'), section('Type `/wavmind daw guru` to get started in 3 steps.')], 'Setup needed');
         return;
       }
-      await send([header(`🎓 Generating ${p.daw} Tip...`), ctx('⏳')], 'Loading');
-      const tip = await getDawGuruTip(p.daw, p.level, p.focus);
+      await send([header(`🎓 Getting Your ${p.daw} Lesson...`), ctx('⏳ Generating personalized lesson')], 'Loading');
+      const tip = await getDawGuruTip(p.daw, p.level, p.style);
       const li = DAW_LEVELS[p.level] || DAW_LEVELS.intermediate;
+      // Track lesson count
+      if (!global.dawGuruProfiles[userId]) global.dawGuruProfiles[userId] = p;
+      global.dawGuruProfiles[userId].tipsCount = (p.tipsCount || 0) + 1;
+      global.dawGuruProfiles[userId].lastTip = new Date().toISOString();
+      saveDawGuru(global.dawGuruProfiles);
       await send([
-        header(`🎓 ${p.daw} — ${li.emoji} ${li.label}`),
-        section(tip || 'Could not generate tip. Try again.'),
+        header(`🎓 ${p.daw} Lesson — ${li.emoji} ${li.label}`),
+        ...(p.style && p.style !== 'general production' ? [section(`🎯 *Focus: ${p.style}*`)] : []),
         divider(),
-        ctx(`🎓 DAW Guru · ${p.daw}${p.focus ? ` · ${p.focus}` : ''} · Daily at 9am`),
-      ], 'Tip');
+        section(tip || 'Could not generate lesson. Try again.'),
+        divider(),
+        section(`📖 *Lesson ${global.dawGuruProfiles[userId].tipsCount}*`),
+        ctx(`🎓 DAW Guru · ${p.daw} · Daily at 9am · Lesson ${global.dawGuruProfiles[userId].tipsCount}`),
+      ], 'Lesson');
       return;
     }
 
-    await send([header('🎓 DAW Guru'), section('`/wavmind daw guru setup` — Get started\n`/wavmind daw guru tip` — Get a tip now\n`/wavmind daw guru status` — Your profile')], 'DAW Guru');
+    // Default — show status or prompt setup
+    await send([header('🎓 DAW Guru'), section('`/wavmind daw guru` — Setup or status\n`/wavmind daw guru tip` — Get a lesson now\n`/wavmind daw guru stop` — Pause daily lessons')], 'DAW Guru');
+    return;
+  }
+
+  // ── PROJECT TRACKER ───────────────────────────────────
+  if (lower.startsWith('project')) {
+    const sub = input.slice(7).trim();
+    const subL = sub.toLowerCase();
+
+    if (!subL || subL === 'list' || subL === 'all') {
+      const projects = global.userProjects[userId] || [];
+      if (!projects.length) {
+        await send([
+          header('🎵 Project Tracker'),
+          section('Track your music projects and get daily reminders.\n\n*Start a project:*\n`/wavmind project add My Dark Trap EP`\n\n*Other commands:*\n`/wavmind project list` — All projects\n`/wavmind project done [name]` — Mark complete\n`/wavmind project update [name] | [note]` — Add note\n`/wavmind project delete [name]` — Delete'),
+        ], 'Projects');
+        return;
+      }
+      const bl = [header(`🎵 Your Projects (${projects.length})`), divider()];
+      projects.forEach((proj, i) => {
+        const age = Math.floor((Date.now() - new Date(proj.createdAt)) / (1000*60*60*24));
+        const lastNote = proj.notes?.slice(-1)[0];
+        bl.push(section(
+          `${proj.done ? '✅' : '🎵'} *${proj.name}*\n` +
+          `📅 ${age} days ago · ${proj.done ? 'Completed' : 'In Progress'}\n` +
+          (lastNote ? `📝 _${lastNote.text}_\n` : '') +
+          `🔔 Reminders: ${proj.reminders ? 'On' : 'Off'}`
+        ));
+        if (i < projects.length - 1) bl.push(divider());
+      });
+      bl.push(divider(), ctx('`/wavmind project add [name]` · `/wavmind project done [name]`'));
+      await send(bl, 'Projects');
+      return;
+    }
+
+    if (subL.startsWith('add ')) {
+      const name = sub.slice(4).trim();
+      if (!name) { await send([header('❗ Missing name'), section('`/wavmind project add My Dark Trap EP`')], 'Missing'); return; }
+      if (!global.userProjects[userId]) global.userProjects[userId] = [];
+      const project = { id: Date.now(), name, createdAt: new Date().toISOString(), done: false, notes: [], reminders: true };
+      global.userProjects[userId].push(project);
+      saveProjects(global.userProjects);
+      await send([
+        header('🎵 Project Added'),
+        section(`*"${name}"* is now being tracked.\n\nWavmind will send you daily reminders to keep working on it.`),
+        twoCol('📝 Add a note', '✅ Mark done'),
+        section('`/wavmind project update ' + name + ' | Started the drums`\n`/wavmind project done ' + name + '`'),
+        ctx('🔔 Daily reminders enabled · Type `/wavmind project list` to see all'),
+      ], 'Added');
+      return;
+    }
+
+    if (subL.startsWith('done ')) {
+      const name = sub.slice(5).trim();
+      const projects = global.userProjects[userId] || [];
+      const proj = projects.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
+      if (!proj) { await send([header('❗ Not Found'), section(`No project matching "${name}"\n\n\`/wavmind project list\` to see all`)], 'Not found'); return; }
+      proj.done = true;
+      proj.completedAt = new Date().toISOString();
+      saveProjects(global.userProjects);
+      const days = Math.floor((Date.now() - new Date(proj.createdAt)) / (1000*60*60*24));
+      await send([
+        header('🏆 Project Complete!'),
+        section(`*"${proj.name}"* finished in *${days} days*! 🎉\n\nGreat work. Ready to start your next track?`),
+        section('`/wavmind project add [new project name]`'),
+      ], 'Done');
+      return;
+    }
+
+    if (subL.startsWith('update ')) {
+      const parts = sub.slice(7).split('|');
+      const name = parts[0]?.trim();
+      const note = parts[1]?.trim();
+      if (!name || !note) { await send([header('❗ Format'), section('`/wavmind project update My EP | Finished the bridge section`')], 'Format'); return; }
+      const projects = global.userProjects[userId] || [];
+      const proj = projects.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
+      if (!proj) { await send([header('❗ Not Found'), section(`No project matching "${name}"`)], 'Not found'); return; }
+      if (!proj.notes) proj.notes = [];
+      proj.notes.push({ text: note, time: new Date().toISOString() });
+      proj.lastUpdated = new Date().toISOString();
+      saveProjects(global.userProjects);
+      await send([header('📝 Note Added'), section(`*"${proj.name}"*\n📝 ${note}`), ctx(`${proj.notes.length} notes total`)], 'Updated');
+      return;
+    }
+
+    if (subL.startsWith('delete ') || subL.startsWith('remove ')) {
+      const name = sub.slice(subL.startsWith('delete') ? 7 : 7).trim();
+      const projects = global.userProjects[userId] || [];
+      const idx = projects.findIndex(p => p.name.toLowerCase().includes(name.toLowerCase()));
+      if (idx === -1) { await send([header('❗ Not Found'), section(`No project matching "${name}"`)], 'Not found'); return; }
+      const removed = projects.splice(idx, 1)[0];
+      saveProjects(global.userProjects);
+      await send([header('🗑️ Project Deleted'), section(`*"${removed.name}"* removed.`)], 'Deleted');
+      return;
+    }
+
+    // Unrecognized subcommand
+    await send([header('🎵 Project Tracker'), section('`/wavmind project list` — All projects\n`/wavmind project add [name]` — New project\n`/wavmind project update [name] | [note]` — Add note\n`/wavmind project done [name]` — Mark complete')], 'Projects');
     return;
   }
 
