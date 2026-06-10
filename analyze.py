@@ -123,4 +123,3 @@ if __name__ == "__main__":
         print(json.dumps(analyze(sys.argv[1])))
     except Exception as e:
         print(json.dumps({"error": str(e)}))
-
