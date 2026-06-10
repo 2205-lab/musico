@@ -395,13 +395,26 @@ async function getNewReleasesByGenre(genre, limit = 6) {
 async function analyzeAudioFile(fileUrl, filename) {
   const filePath = path.join('/tmp', filename.replace(/[^a-zA-Z0-9._-]/g, '_'));
   try {
-    const response = await axios.get(fileUrl, { headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }, responseType: 'arraybuffer', timeout: 30000 });
+    const response = await axios.get(fileUrl, {
+      headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` },
+      responseType: 'arraybuffer',
+      timeout: 30000
+    });
     fs.writeFileSync(filePath, response.data);
-    const result = execSync(`python3 analyze.py "${filePath}"`, { timeout: 90000 }).toString().trim();
-    const analysis = JSON.parse(result);
+    const result = execSync(
+      `python3 analyze.py "${filePath}"`,
+      { timeout: 90000, stderr: 'pipe' }
+    ).toString().trim();
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    return analysis;
+    const parsed = JSON.parse(result);
+    if (parsed.error) {
+      console.error('analyze.py error:', parsed.error);
+      return { error: parsed.error };
+    }
+    return parsed;
   } catch (err) {
+    console.error('analyzeAudioFile error:', err.message);
+    console.error('stderr:', err.stderr?.toString());   // ← shows the real Python error
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     return { error: err.message };
   }
