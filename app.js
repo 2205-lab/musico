@@ -414,7 +414,11 @@ app.action('quick_compare', async ({ body, ack, client }) => {
 });
 app.action('quick_feedback', async ({ body, ack, client }) => {
   await ack();
-  await client.chat.postMessage({ channel: body.user.id, text: 'Feedback', blocks: [header('🎚️ Mix Feedback'), section('Describe your mix:\n\n`/wavmind feedback my trap beat at 140bpm feels muddy`\n\n*Or upload audio first then:*\n`/wavmind feedback bpm:140 key:F_minor`')] });
+  await client.chat.postMessage({ channel: body.user.id, text: 'Feedback', blocks: [
+    header('🎚️ Get Mix Feedback'),
+    section('*If you just uploaded audio:*\nType `/wavmind feedback` — Wavmind uses your scan data automatically.\n\n*No upload yet?*\nType `/wavmind feedback` + describe your mix:\n`/wavmind feedback my trap beat feels muddy and lacks punch`'),
+    ctx('💡 Upload audio first for feedback based on real measurements'),
+  ]});
 });
 
 // ─── APP HOME ─────────────────────────────────────────────
@@ -802,7 +806,16 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
   const input = command.text.trim();
   const lower = input.toLowerCase();
   const userId = command.user_id;
-  const send = async (blocks, t) => respond({ text: t || 'Wavmind', blocks });
+  const channelId = command.channel_id;
+  // Use respond() for first reply (ephemeral), then postMessage for follow-ups
+  let firstSent = false;
+  const send = async (blocks, t) => {
+    if (!firstSent) {
+      firstSent = true;
+      return respond({ text: t || 'Wavmind', blocks, response_type: 'ephemeral' });
+    }
+    return client.chat.postMessage({ channel: channelId, text: t || 'Wavmind', blocks });
+  };
 
   if (!input || lower === 'help' || lower === 'menu') { await send(getWelcomeBlocks(), 'Welcome'); return; }
 
