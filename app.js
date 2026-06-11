@@ -1,4 +1,4 @@
-require('dotenv').config();
+vrequire('dotenv').config();
 const { App } = require('@slack/bolt');
 const Groq = require('groq-sdk');
 const axios = require('axios');
@@ -271,43 +271,62 @@ async function getArtistStats(name) {
 }
 
 // ─── SPOTIFY NEW RELEASES ─────────────────────────────────
-async function getNewReleases() {
+// Different queries per genre for variety each fetch
+const RELEASE_POOLS = {
+  default:   ['new music 2025','top songs 2025','trending 2025','hits 2025','popular songs 2025','chart 2025'],
+  trap:      ['trap 2025','dark trap','trap beats 2025','melodic trap','hard trap 2025'],
+  pop:       ['pop 2025','pop hits','top pop songs','viral pop','pop music 2025'],
+  rnb:       ['rnb 2025','r&b soul','neo soul 2025','rnb hits','contemporary rnb'],
+  hiphop:    ['hip hop 2025','rap 2025','rap hits','new rap','hip hop music 2025'],
+  afrobeats: ['afrobeats 2025','afro pop','afropop hits','afrobeats music'],
+  drill:     ['drill 2025','uk drill','drill rap','drill music 2025'],
+};
+const releaseIdx = {};
+
+async function getNewReleases(genre) {
   try {
     const token = await getSpotifyToken();
-    const r = await axios.get('https://api.spotify.com/v1/browse/new-releases', {
+    const pool = RELEASE_POOLS[genre] || RELEASE_POOLS.default;
+    const key  = genre || 'default';
+    // Rotate query each call for variety
+    releaseIdx[key] = ((releaseIdx[key] ?? -1) + 1) % pool.length;
+    const q = pool[releaseIdx[key]];
+    // Random offset 0-30 so results differ each time
+    const offset = Math.floor(Math.random() * 30);
+    const r = await axios.get('https://api.spotify.com/v1/search', {
       headers: { Authorization: `Bearer ${token}` },
-      params: { limit: 10 },
+      params:  { q, type: 'track', limit: 10, offset, market: 'US' },
+      timeout: 10000,
     });
-    return (r.data.albums?.items || []).slice(0, 8).map(a => ({
-      name: a.name,
-      artist: a.artists.map(x => x.name).join(', '),
-      releaseDate: a.release_date,
-      type: a.album_type,
-      url: a.external_urls?.spotify || '',
+    let tracks = r.data.tracks?.items || [];
+    // Fallback: retry without offset if empty
+    if (!tracks.length) {
+      const fb = await axios.get('https://api.spotify.com/v1/search', {
+        headers: { Authorization: `Bearer ${token}` },
+        params:  { q, type: 'track', limit: 10, market: 'US' },
+        timeout: 10000,
+      });
+      tracks = fb.data.tracks?.items || [];
+    }
+    if (!tracks.length) return null;
+    // Shuffle for extra variety
+    tracks = tracks.sort(() => Math.random() - 0.5);
+    return tracks.slice(0, 8).map(t => ({
+      name:        t.name,
+      artist:      t.artists.map(x => x.name).join(', '),
+      album:       t.album?.name || '',
+      releaseDate: t.album?.release_date || '',
+      url:         t.external_urls?.spotify || '',
+      popularity:  t.popularity || 0,
     }));
-  } catch (e) { console.error('New releases:', e.message); return null; }
+  } catch (e) {
+    console.error('New releases error:', e.message);
+    return null;
+  }
 }
 
 async function searchNewReleasesByGenre(genre) {
-  try {
-    const token = await getSpotifyToken();
-    // Search recent tracks for this genre
-    const year = new Date().getFullYear();
-    const r = await axios.get('https://api.spotify.com/v1/search', {
-      headers: { Authorization: `Bearer ${token}` },
-      params: { q: `${genre} year:${year}`, type: 'track', limit: 8, market: 'US' },
-    });
-    const tracks = r.data.tracks?.items || [];
-    if (!tracks.length) return null;
-    return tracks.map(t => ({
-      name: t.name,
-      artist: t.artists.map(x => x.name).join(', '),
-      album: t.album?.name || '',
-      releaseDate: t.album?.release_date || '',
-      url: t.external_urls?.spotify || '',
-      popularity: t.popularity || 0,
-    }));
-  } catch (e) { console.error('Genre releases:', e.message); return null; }
+  return getNewReleases(genre);
 }
 
 // ─── DAW GURU ─────────────────────────────────────────────
@@ -530,6 +549,205 @@ app.action('releases_hiphop',   async ({ body, ack, client }) => { await ack(); 
 app.action('releases_afrobeats',async ({ body, ack, client }) => { await ack(); await sendReleasesMessage(client, body.user.id, 'afrobeats'); });
 app.action('releases_drill',    async ({ body, ack, client }) => { await ack(); await sendReleasesMessage(client, body.user.id, 'drill'); });
 
+// ─── COLLAB / REFERENCE / DAW / ARTIST BUTTONS ──────────
+
+// Collab session info button
+app.action('collab_open', async ({ body, ack, client }) => {
+  await ack();
+  await client.chat.postMessage({ channel: body.user.id, text: 'Collab', blocks: [
+    header('🤝 Team Collab Sessions'),
+    section('Log ideas, notes and decisions with your team. Get an AI summary at any time.'),
+    divider(),
+    section('*Start a session:*\n`/wavmind collab Dark Trap EP`\n\n*During a session:*\n`/wavmind idea [your idea]`\n`/wavmind note [feedback]`\n`/wavmind decided [decision]`\n`/wavmind summary` — AI overview\n`/wavmind end` — Finish session'),
+    ctx('💡 Use this in a shared channel with your team'),
+  ]});
+});
+
+// Reference analysis buttons
+app.action('reference_open', async ({ body, ack, client }) => {
+  await ack();
+  await client.chat.postMessage({ channel: body.user.id, text: 'Reference', blocks: [
+    header('🔍 Reference Track Analysis'),
+    section('Get real Spotify audio data + a production blueprint for any song.'),
+    divider(),
+    actions([
+      btn('🎵 Blinding Lights',   'ref_blinding_lights'),
+      btn('🎵 Gods Plan',       'ref_gods_plan'),
+      btn('🎵 Sicko Mode',        'ref_sicko_mode'),
+    ]),
+    actions([
+      btn('🎵 Essence',           'ref_essence'),
+      btn('🎵 Rich Flex',         'ref_rich_flex'),
+      btn('🎵 Search Any Song',   'ref_custom'),
+    ]),
+    ctx('Or type: `/wavmind reference [song name]`'),
+  ]});
+});
+
+// Pre-built reference buttons for popular tracks
+const REF_TRACKS = {
+  ref_blinding_lights: 'Blinding Lights The Weeknd',
+  ref_gods_plan:       'Gods Plan Drake',
+  ref_sicko_mode:      'Sicko Mode Travis Scott',
+  ref_essence:         'Essence Wizkid',
+  ref_rich_flex:       'Rich Flex Drake 21 Savage',
+};
+Object.entries(REF_TRACKS).forEach(([actionId, trackName]) => {
+  app.action(actionId, async ({ body, ack, client }) => {
+    await ack();
+    const userId = body.user.id;
+    await client.chat.postMessage({ channel: userId, text: 'Analyzing...', blocks: [
+      header(`🔍 Analyzing "${trackName}"...`), ctx('⏳ Fetching Spotify data'),
+    ]});
+    const f = await getTrackFeatures(trackName);
+    if (!f) {
+      await client.chat.postMessage({ channel: userId, text: 'Not found', blocks: [
+        header('❗ Not Found'), section(`Could not find "${trackName}" on Spotify.`),
+        actions([btn('🔍 Browse References', 'reference_open')]),
+      ]});
+      return;
+    }
+    const ai = await askAI(`How to achieve the sound of ${f.name} by ${f.artist}: BPM ${f.bpm}, Key ${f.key}, Energy ${f.energy}%, Loudness ${f.loudness}dB. Specific techniques and real plugin names.`);
+    await client.chat.postMessage({ channel: userId, text: 'Reference', blocks: [
+      header(`🎵 ${f.name} — ${f.artist}`),
+      divider(),
+      section('📊 *Real Spotify Data*'),
+      twoCol(`🥁 *BPM*
+${f.bpm}`, `🎵 *Key*
+${f.key}`),
+      twoCol(`⚡ *Energy*
+${f.energy}%`, `💃 *Danceability*
+${f.danceability}%`),
+      twoCol(`🔊 *Loudness*
+${f.loudness} dB`, `😊 *Valence*
+${f.valence}%`),
+      divider(),
+      section('🎛️ *How to sound like this:*'),
+      section(ai || 'Error generating blueprint.'),
+      divider(),
+      actions([
+        btn('🔍 More References', 'reference_open'),
+        btn('🆚 Compare My Track', 'quick_compare'),
+      ]),
+    ]});
+  });
+});
+
+app.action('ref_custom', async ({ body, ack, client }) => {
+  await ack();
+  await client.chat.postMessage({ channel: body.user.id, text: 'Reference', blocks: [
+    header('🔍 Search Any Song'),
+    section('Type the song + artist name:\\n`/wavmind reference Blinding Lights The Weeknd`\\n`/wavmind reference Gods Plan Drake`\\n`/wavmind reference Essence Wizkid`'),
+    ctx('Uses real Spotify data — works for any song'),
+  ]});
+});
+
+// DAW Help buttons
+app.action('daw_open', async ({ body, ack, client }) => {
+  await ack();
+  await client.chat.postMessage({ channel: body.user.id, text: 'DAW Help', blocks: [
+    header('🎸 DAW Help'),
+    section('Step-by-step tutorials powered by AI + real-time web search.'),
+    divider(),
+    actions([
+      btn('FL Studio',    'daw_fl_studio'),
+      btn('Ableton Live', 'daw_ableton'),
+      btn('Logic Pro',    'daw_logic'),
+      btn('Pro Tools',    'daw_protools'),
+    ]),
+    actions([
+      btn('Cubase',       'daw_cubase'),
+      btn('Studio One',   'daw_studio_one'),
+      btn('GarageBand',   'daw_garageband'),
+      btn('Reaper',       'daw_reaper'),
+    ]),
+    ctx('Or type: `/wavmind daw [daw name] [your question]`'),
+  ]});
+});
+
+const DAW_MAP = { daw_fl_studio:'FL Studio', daw_ableton:'Ableton Live', daw_logic:'Logic Pro', daw_protools:'Pro Tools', daw_cubase:'Cubase', daw_studio_one:'Studio One', daw_garageband:'GarageBand', daw_reaper:'Reaper' };
+Object.entries(DAW_MAP).forEach(([actionId, dawName]) => {
+  app.action(actionId, async ({ body, ack, client }) => {
+    await ack();
+    await client.chat.postMessage({ channel: body.user.id, text: 'DAW Help', blocks: [
+      header(`🎸 ${dawName} Help`),
+      section(`What do you want to learn in *${dawName}*?
+
+Type your question:
+\`/wavmind daw ${dawName.toLowerCase()} how to sidechain kick\`
+\`/wavmind daw ${dawName.toLowerCase()} set up reverb send\`
+\`/wavmind daw ${dawName.toLowerCase()} mix bus chain\``),
+      ctx(`AI answer + real web results for every question`),
+    ]});
+  });
+});
+
+// Artist Compare buttons
+app.action('artist_open', async ({ body, ack, client }) => {
+  await ack();
+  await client.chat.postMessage({ channel: body.user.id, text: 'Artist Compare', blocks: [
+    header('🎤 Artist DNA Comparison'),
+    section('Compare two artists using real Spotify audio data — BPM, energy, key, loudness and more.'),
+    divider(),
+    actions([
+      btn('Drake vs Travis Scott',    'artist_drake_travis'),
+      btn('Wizkid vs Burna Boy',      'artist_wizkid_burna'),
+      btn('Kanye vs Tyler',           'artist_kanye_tyler'),
+    ]),
+    actions([
+      btn('The Weeknd vs Frank Ocean','artist_weeknd_frank'),
+      btn('Eminem vs Kendrick',       'artist_eminem_kendrick'),
+      btn('Compare Custom',           'artist_custom'),
+    ]),
+    ctx('Or type: `/wavmind artist [artist1] and [artist2]`'),
+  ]});
+});
+
+const ARTIST_PAIRS = {
+  artist_drake_travis:    ['Drake',      'Travis Scott'],
+  artist_wizkid_burna:    ['Wizkid',     'Burna Boy'],
+  artist_kanye_tyler:     ['Kanye West', 'Tyler the Creator'],
+  artist_weeknd_frank:    ['The Weeknd', 'Frank Ocean'],
+  artist_eminem_kendrick: ['Eminem',     'Kendrick Lamar'],
+};
+Object.entries(ARTIST_PAIRS).forEach(([actionId, [a1, a2]]) => {
+  app.action(actionId, async ({ body, ack, client }) => {
+    await ack();
+    const userId = body.user.id;
+    await client.chat.postMessage({ channel: userId, text: 'Comparing...', blocks: [
+      header(`🎤 ${a1} vs ${a2}`), ctx('⏳ Fetching Spotify data for both artists'),
+    ]});
+    const [s1, s2] = await Promise.all([getArtistStats(a1), getArtistStats(a2)]);
+    if (!s1 || !s2) {
+      await client.chat.postMessage({ channel: userId, text: 'Error', blocks: [header('❗ Could not fetch'), section('Try again shortly.')]});
+      return;
+    }
+    const ai = await askAI(`Compare production styles: ${s1.name} (BPM ${s1.bpm}, Energy ${s1.energy}%, Key ${s1.key}, Loudness ${s1.loudness}dB) vs ${s2.name} (BPM ${s2.bpm}, Energy ${s2.energy}%, Key ${s2.key}, Loudness ${s2.loudness}dB). Key differences and how to blend both styles.`);
+    await client.chat.postMessage({ channel: userId, text: 'Artist Compare', blocks: [
+      header(`🎤 ${s1.name} vs ${s2.name}`),
+      divider(),
+      section('📊 *Real Spotify Data*'),
+      { type:'section', fields:[{type:'mrkdwn',text:`*${s1.name}*`},{type:'mrkdwn',text:`*${s2.name}*`}] },
+      { type:'section', fields:[{type:'mrkdwn',text:`🥁 BPM: *${s1.bpm}*`},{type:'mrkdwn',text:`🥁 BPM: *${s2.bpm}*`}] },
+      { type:'section', fields:[{type:'mrkdwn',text:`⚡ Energy: *${s1.energy}%*`},{type:'mrkdwn',text:`⚡ Energy: *${s2.energy}%*`}] },
+      { type:'section', fields:[{type:'mrkdwn',text:`🔊 Loud: *${s1.loudness}dB*`},{type:'mrkdwn',text:`🔊 Loud: *${s2.loudness}dB*`}] },
+      { type:'section', fields:[{type:'mrkdwn',text:`🎵 Key: *${s1.key}*`},{type:'mrkdwn',text:`🎵 Key: *${s2.key}*`}] },
+      divider(),
+      section(ai || 'Error'),
+      divider(),
+      actions([btn('🎤 Compare Others', 'artist_open'), btn('🔍 Reference Track', 'reference_open')]),
+    ]});
+  });
+});
+
+app.action('artist_custom', async ({ body, ack, client }) => {
+  await ack();
+  await client.chat.postMessage({ channel: body.user.id, text: 'Artist Compare', blocks: [
+    header('🎤 Compare Any Two Artists'),
+    section('Type both artist names:\n`/wavmind artist Drake and Travis Scott`\n`/wavmind artist Wizkid and Burna Boy`\n`/wavmind artist The Weeknd and Frank Ocean`'),
+  ]});
+});
+
 // ─── DAW GURU BUTTON HANDLERS ────────────────────────────
 const DAW_BUTTONS   = ['FL Studio','Ableton Live','Logic Pro','Pro Tools','Cubase','Studio One','GarageBand','Reaper','Bitwig'];
 const LEVEL_BUTTONS = ['beginner','intermediate','advanced','professional'];
@@ -745,14 +963,20 @@ async function publishAppHome(client, userId) {
     // HERO
     blocks.push(section('*🎛️ Wavmind*  —  _AI Music Production Agent_'));
     blocks.push(actions([
-      btn('🆕 New Releases',  'releases_global'),
-      btn('🎓 DAW Guru',      'guru_open'),
-      btn('📌 Projects',      'project_list'),
+      btn('🆕 New Releases',   'releases_global'),
+      btn('🎓 DAW Guru',       'guru_open'),
+      btn('📌 Projects',       'project_list'),
     ]));
     blocks.push(actions([
-      btn('🆚 Compare Tracks',  'quick_compare', 'primary'),
-      btn('🎵 Free Samples',    'samples_open'),
-      btn('🎚️ Mix Feedback',   'quick_feedback'),
+      btn('🆚 Compare Tracks', 'quick_compare', 'primary'),
+      btn('🎵 Free Samples',   'samples_open'),
+      btn('🎚️ Mix Feedback',  'quick_feedback'),
+    ]));
+    blocks.push(actions([
+      btn('🔍 Reference Track','reference_open'),
+      btn('🎤 Artist Compare', 'artist_open'),
+      btn('🎸 DAW Help',       'daw_open'),
+      btn('🤝 Collab',         'collab_open'),
     ]));
     blocks.push(divider());
 
@@ -1354,7 +1578,13 @@ Be direct and specific. Use the actual numbers.`;
     const name = input.slice(6).trim().replace(/['"]/g,'') || 'Untitled';
     if (getCollabSession(command.channel_id)) { await send([header('⚠️ Session Active'), section('Type `/wavmind end` to finish first')], 'Active'); return; }
     startCollabSession(command.channel_id, name, userId);
-    await respond({ response_type: 'in_channel', text: 'Collab started', blocks: [header('🤝 Collab Session Started'), section(`*Track:* "${name}"\n*By:* <@${userId}>`), divider(), section('Log your work:\n`/wavmind idea [idea]` — Log an idea\n`/wavmind note [feedback]` — Log feedback\n`/wavmind decided [decision]` — Log a decision\n`/wavmind summary` — AI summary\n`/wavmind end` — End session'), ctx(`Session active for "${name}"`) ] });
+    await respond({ response_type: 'in_channel', text: 'Collab started', blocks: [
+      header('🤝 Collab Session Started'),
+      section(`*Track:* "${name}"\n*By:* <@${userId}>`),
+      divider(),
+      section('`/wavmind idea [idea]` — Log an idea\n`/wavmind note [feedback]` — Log feedback\n`/wavmind decided [decision]` — Log a decision\n`/wavmind summary` — AI summary\n`/wavmind end` — End session'),
+      ctx(`Session active for "${name}"`),
+    ]});
     return;
   }
   if (lower.startsWith('idea ')) {
@@ -1368,7 +1598,7 @@ Be direct and specific. Use the actual numbers.`;
     const t=input.slice(5).trim(); const s=getCollabSession(command.channel_id);
     if (!s) { await send([header('❗ No Session'), section('`/wavmind collab [track name]`')], 'No session'); return; }
     s.feedback.push({ text: t, user: userId, time: new Date().toISOString() });
-    await respond({ response_type:'in_channel', text:'Note logged', blocks:[header('📝 Note Logged'),section(`*"${t}"*\n— <@${userId}>`),ctx(`${s.feedback.length} notes for "${s.trackName}"`)] });
+    await respond({ response_type:'in_channel', text:'Note logged', blocks:[header('📝 Note Logged'),section(`*"${t}"*\n— <@${userId}>`),ctx(`${s.feedback.length} notes for "${s.trackName()}"`)] });
     return;
   }
   if (lower.startsWith('decided ')) {
@@ -1424,22 +1654,17 @@ Be direct and specific. Use the actual numbers.`;
   if (lower.startsWith('new releases') || lower.startsWith('newreleases') || lower === 'new') {
     const genre = input.replace(/^new releases?\s*/i, '').trim();
     await send([header('🆕 Latest on Spotify...'), ctx('⏳ Fetching new releases')], 'Fetching');
-    let releases;
-    if (genre) {
-      releases = await searchNewReleasesByGenre(genre);
-      if (!releases?.length) releases = await getNewReleases();
-    } else {
-      releases = await getNewReleases();
-    }
+    const releases = await getNewReleases(genre || null);
     if (!releases?.length) { await send([header('❗ Could not fetch'), section('Try again shortly.')], 'Error'); return; }
-    const bl = [header(`🆕 New Releases${genre ? ` — ${genre}` : ''}`), section(`*${releases.length} fresh tracks* on Spotify`), divider()];
+    const bl = [header(`🆕 New Releases${genre ? ` — ${genre}` : ''}`), section(`*${releases.length} fresh tracks* — _Different results every time_`), divider()];
     releases.forEach((rel, i) => {
-      const date = rel.releaseDate ? `📅 ${rel.releaseDate}` : '';
-      const pop = rel.popularity !== undefined ? `  🔥 ${rel.popularity}%` : '';
-      bl.push(section(`*${i+1}. ${rel.name}*\n👤 ${rel.artist}${rel.album ? `\n💿 ${rel.album}` : ''}  ${date}${pop}\n🎵 *<${rel.url}|▶ Listen on Spotify>*`));
+      bl.push(section(`*${i+1}. ${rel.name}*\n👤 ${rel.artist}${rel.album ? `  💿 ${rel.album}` : ''}  📅 ${rel.releaseDate}  🔥 ${rel.popularity}%\n🎵 *<${rel.url}|▶ Listen on Spotify>*`));
       if (i < releases.length - 1) bl.push(divider());
     });
-    bl.push(divider(), ctx('🎵 Spotify · Updated daily'));
+    bl.push(divider(), actions([
+      btn('🎵 Trap', 'releases_trap'), btn('🎵 Pop', 'releases_pop'),
+      btn('🎵 R&B', 'releases_rnb'), btn('🔄 Refresh', 'releases_refresh'),
+    ]));
     await send(bl, 'New Releases');
     return;
   }
@@ -1462,7 +1687,6 @@ Be direct and specific. Use the actual numbers.`;
   if (lower.startsWith('project')) {
     const sub = input.slice(7).trim();
     const subL = sub.toLowerCase();
-
     if (!subL || subL === 'list' || subL === 'all') {
       const projects = global.userProjects[userId] || [];
       if (!projects.length) {
@@ -1480,7 +1704,6 @@ Be direct and specific. Use the actual numbers.`;
       await send(bl, 'Projects');
       return;
     }
-
     if (subL.startsWith('add ')) {
       const name = sub.slice(4).trim();
       if (!name) { await send([header('❗ Missing name'), section('`/wavmind project add My Dark Trap EP`')], 'Missing'); return; }
@@ -1490,32 +1713,24 @@ Be direct and specific. Use the actual numbers.`;
       saveProjects(global.userProjects);
       await send([
         header('📌 Project Added'),
-        section(`*"${name}"* is now being tracked.\n\nWavmind will send daily reminders to keep you on track.`),
+        section(`*"${name}"* is now being tracked.\n\nWavmind will DM you daily reminders to keep making progress.`),
         actions([btn('📋 View All Projects', 'project_list')]),
-        ctx('Type `/wavmind project update ' + name + ' | [note]` to log progress'),
       ], 'Added');
       if (userId) { try { await publishAppHome(client, userId); } catch(e){} }
       return;
     }
-
     if (subL.startsWith('done ')) {
       const name = sub.slice(5).trim();
       const projects = global.userProjects[userId] || [];
       const proj = projects.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
-      if (!proj) { await send([header('❗ Not Found'), section(`No project matching "${name}"\n\n\`/wavmind project list\` to see all`)], 'Not found'); return; }
-      proj.done = true;
-      proj.completedAt = new Date().toISOString();
+      if (!proj) { await send([header('❗ Not Found'), section(`No project matching "${name}"`)], 'Not found'); return; }
+      proj.done = true; proj.completedAt = new Date().toISOString();
       saveProjects(global.userProjects);
       const days = Math.floor((Date.now() - new Date(proj.createdAt)) / (1000*60*60*24));
-      await send([
-        header('🏆 Project Complete!'),
-        section(`*"${proj.name}"* — finished in *${days} days*! 🎉`),
-        actions([btn('➕ Start New Project', 'project_add_prompt', 'primary'), btn('📋 All Projects', 'project_list')]),
-      ], 'Done');
+      await send([header('🏆 Project Complete!'), section(`*"${proj.name}"* — finished in *${days} days*! 🎉`), actions([btn('➕ New Project', 'project_add_prompt', 'primary'), btn('📋 All Projects', 'project_list')])], 'Done');
       if (userId) { try { await publishAppHome(client, userId); } catch(e){} }
       return;
     }
-
     if (subL.startsWith('update ')) {
       const parts = sub.slice(7).split('|');
       const name = parts[0]?.trim(), note = parts[1]?.trim();
@@ -1530,7 +1745,6 @@ Be direct and specific. Use the actual numbers.`;
       await send([header('📝 Progress Logged'), section(`*"${proj.name}"*\n📝 ${note}`), actions([btn('📋 All Projects', 'project_list')])], 'Updated');
       return;
     }
-
     if (subL.startsWith('delete ') || subL.startsWith('remove ')) {
       const name = sub.slice(7).trim();
       const projects = global.userProjects[userId] || [];
@@ -1538,11 +1752,10 @@ Be direct and specific. Use the actual numbers.`;
       if (idx === -1) { await send([header('❗ Not Found'), section(`No project matching "${name}"`)], 'Not found'); return; }
       const removed = projects.splice(idx, 1)[0];
       saveProjects(global.userProjects);
-      await send([header('🗑️ Project Deleted'), section(`*"${removed.name}"* removed.`)], 'Deleted');
+      await send([header('🗑️ Deleted'), section(`*"${removed.name}"* removed.`)], 'Deleted');
       return;
     }
-
-    await send([header('📌 Project Tracker'), section('`/wavmind project add [name]` — New project\n`/wavmind project list` — All projects\n`/wavmind project update [name] | [note]` — Log progress\n`/wavmind project done [name]` — Mark complete')], 'Projects');
+    await send([header('📌 Project Tracker'), section('`/wavmind project add [name]`\n`/wavmind project list`\n`/wavmind project update [name] | [note]`\n`/wavmind project done [name]`')], 'Projects');
     return;
   }
 
