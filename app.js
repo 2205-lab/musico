@@ -457,10 +457,53 @@ app.action('quick_compare', async ({ body, ack, client }) => {
 
 app.action('quick_feedback', async ({ body, ack, client }) => {
   await ack();
-  await client.chat.postMessage({ channel: body.user.id, text: 'Feedback', blocks: [
-    header('🎚️ Get Mix Feedback'),
-    section('*Just uploaded audio?*\nType `/wavmind feedback` — Wavmind uses your scan data automatically.\n\n*No upload yet?*\n`/wavmind feedback my beat feels muddy and lacks punch`'),
-    ctx('Upload audio first for analysis-based feedback'),
+  const userId = body.user.id;
+  const stored = global.pendingAnalysis?.[userId];
+  if (!stored || stored.error) {
+    await client.chat.postMessage({ channel: userId, text: 'Feedback', blocks: [
+      header('🎚️ Mix Feedback'),
+      section('Upload an MP3 or WAV first — Wavmind will scan it and give you feedback based on the actual audio data.'),
+      ctx('Or type: `/wavmind feedback my beat feels muddy and lacks punch`'),
+    ]});
+    return;
+  }
+  // Generate real feedback from the scan data
+  await client.chat.postMessage({ channel: userId, text: 'Generating feedback...', blocks: [
+    header('🎚️ Analyzing your mix...'), section(`*${stored.filename}*`), ctx('⏳ Generating feedback from scan data'),
+  ]});
+  const hasFull = stored.lufs !== undefined;
+  const dataStr = hasFull
+    ? `Loudness: ${stored.lufs} LUFS, Stereo width: ${stored.stereo_width}%, Bass/Low: ${stored.low_pct}%, Mids: ${stored.mid_pct}%, Highs: ${stored.high_pct}%, Energy: ${stored.energy}%, Vocal clarity score: ${stored.vocal_clarity}%, Brightness: ${stored.brightness}, Duration: ${stored.duration}s`
+    : `Energy: ${stored.energy}%, Bass: ${stored.bass_ratio}%, Brightness: ${stored.brightness}, Duration: ${stored.duration}s`;
+  const prompt = `You are a professional mixing and mastering engineer. Here is real measured audio analysis data for the track "${stored.filename}":
+${dataStr}
+
+Give specific, actionable mix feedback based on these exact measurements. Cover:
+1. 🔊 Loudness & Dynamics — is the level right? needs limiting/compression?
+2. 🔉 Frequency Balance — bass, mids, highs — specific EQ suggestions in Hz
+3. 🎚️ Stereo & Width — is the stereo field right?
+4. 🎤 Vocal Presence — does it cut through?
+5. ✅ Top 3 fixes — specific actions with real plugin names
+
+Be direct and specific. Reference the actual measured numbers. Keep it under 200 words.`;
+  const feedback = await askAI(prompt);
+  const stereoLabel = stored.stereo_width < 10 ? 'Mono/Very narrow' : stored.stereo_width < 25 ? 'Narrow' : stored.stereo_width < 50 ? 'Normal' : 'Wide';
+  const vcLabel     = stored.vocal_clarity >= 60 ? 'Clear' : stored.vocal_clarity >= 35 ? 'Balanced' : 'Needs boost';
+  const energyLabel = stored.energy >= 75 ? 'High' : stored.energy >= 50 ? 'Good' : 'Low';
+  await client.chat.postMessage({ channel: userId, text: 'Mix Feedback', blocks: [
+    header('🎚️ Mix Feedback'),
+    section(`*${stored.filename}*`),
+    divider(),
+    ...(hasFull ? [
+      twoCol(`🔊 *Loudness*\n${loudnessLabel(stored.lufs)}`, `🎚️ *Stereo*\n${stereoLabel}`),
+      twoCol(`🎤 *Vocals*\n${vcLabel}`, `⚡ *Energy*\n${energyLabel}`),
+    ] : [
+      twoCol(`⚡ *Energy*\n${energyLabel}`, `🌈 *Brightness*\n${stored.brightness}`),
+    ]),
+    divider(),
+    section(feedback || 'Could not generate feedback. Try again.'),
+    divider(),
+    actions([btn('🆚 Compare with Reference', 'quick_compare'), btn('🔄 New Feedback', 'quick_feedback')]),
   ]});
 });
 
@@ -1181,14 +1224,22 @@ Give specific EQ, compression fixes. Top 3 changes. Real plugin names.`;
     if (userId) trackUpload(userId, file.name, a);
     global.pendingAnalysis = global.pendingAnalysis || {};
     global.pendingAnalysis[channelId] = { filename: file.name, ...a };
+    if (userId) global.pendingAnalysis[userId] = { filename: file.name, ...a };
 
     const hasFull = a.lufs !== undefined;
     const bl = [header('🎛️ Scan Complete'), section(`*${file.name}*`), divider()];
 
     if (hasFull) {
-      bl.push(twoCol(`🔊 *Loudness*\n${loudnessLabel(a.lufs)}`, `🎚️ *Stereo Width*\n${a.stereo_width}%`));
-      bl.push(twoCol(`📊 *Low / Mid / High*\n${a.low_pct}% / ${a.mid_pct}% / ${a.high_pct}%`, `🎤 *Vocal Clarity*\n${a.vocal_clarity}%`));
-      bl.push(twoCol(`⚡ *Energy*\n${a.energy}%`, `🌈 *Brightness*\n${a.brightness}`));
+      // Simple human-readable labels
+      const stereoLabel = a.stereo_width < 10 ? 'Mono / Very narrow' : a.stereo_width < 25 ? 'Narrow' : a.stereo_width < 50 ? 'Normal ✅' : 'Wide ✅';
+      const vcLabel     = a.vocal_clarity >= 60 ? 'Clear ✅' : a.vocal_clarity >= 35 ? 'Balanced' : a.vocal_clarity >= 15 ? 'Needs boost' : 'Low — add presence';
+      const energyLabel = a.energy >= 75 ? 'High ✅' : a.energy >= 50 ? 'Good' : a.energy >= 30 ? 'Low' : 'Very low';
+      const bassLabel   = a.low_pct > 60 ? 'Heavy — may be muddy' : a.low_pct > 40 ? 'Balanced ✅' : a.low_pct > 20 ? 'Light' : 'Very thin';
+      const highLabel   = a.high_pct > 20 ? 'Bright' : a.high_pct > 8 ? 'Balanced ✅' : a.high_pct > 3 ? 'Dull — add air' : 'Very dull';
+      bl.push(twoCol(`🔊 *Loudness*\n${loudnessLabel(a.lufs)}`, `🎚️ *Stereo Width*\n${stereoLabel}`));
+      bl.push(twoCol(`🎤 *Vocal Clarity*\n${vcLabel}`, `⚡ *Energy*\n${energyLabel}`));
+      bl.push(twoCol(`🔉 *Bass*\n${bassLabel}`, `✨ *High End*\n${highLabel}`));
+      bl.push(twoCol(`🌈 *Brightness*\n${a.brightness}`, `⏱️ *Duration*\n${Math.floor(a.duration/60)}:${String(Math.round(a.duration%60)).padStart(2,'0')}`));
     } else {
       const mins = Math.floor(a.duration/60), secs = String(a.duration%60).padStart(2,'0');
       const issues = [];
