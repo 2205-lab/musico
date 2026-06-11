@@ -103,10 +103,12 @@ def analyze(path):
     high_pct = round(high_e / audible_total * 100, 1)
     bass_ratio = int(round(low_pct))
 
-    # Vocal clarity: presence band (1-5kHz) as % of total audible energy
-    # Clear vocals push energy into this range. Scale: 5%=0, 30%=100
-    presence_pct = presence_e / audible_total * 100
-    vocal_clarity = int(max(0, min(100, round((presence_pct - 5) * 4))))
+    # Vocal clarity: presence band (1-5kHz) relative to mid band (250-4kHz)
+    # A high ratio means vocals cut through the mix clearly
+    # Scale: 0.25 ratio = 0%, 0.80 ratio = 100%
+    mid_total = float(band_energy[mid_mask].sum()) + 1e-12
+    presence_ratio = presence_e / mid_total
+    vocal_clarity = int(max(0, min(100, round((presence_ratio - 0.25) / 0.55 * 100))))
 
     # Stereo width
     if is_stereo:
