@@ -1,4 +1,4 @@
-vrequire('dotenv').config();
+require('dotenv').config();
 const { App } = require('@slack/bolt');
 const Groq = require('groq-sdk');
 const axios = require('axios');
