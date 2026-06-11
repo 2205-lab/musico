@@ -531,7 +531,7 @@ app.action('samples_open', async ({ body, ack, client }) => {
     await client.chat.postMessage({ channel: userId, text: `Finding ${genre} samples...`, blocks: [header(`🎵 Searching ${genre} samples...`), ctx('⏳ Different results every search')]});
     const sounds = await searchFreesound(genre, userId);
     if (!sounds?.length) {
-      await client.chat.postMessage({ channel: userId, text: 'No results', blocks: [header('❗ No Results'), section('Try a different genre.'), actions([btn('← All Genres', 'samples_open')])]});
+      await client.chat.postMessage({ channel: userId, text: 'No results', blocks: [header('🎵 Nothing Found — Yet'), section('That genre came up empty this time. Try another:'), actions([btn('🥁 Drums', 'samples_drums'), btn('🎹 Piano', 'samples_piano'), btn('← All Genres', 'samples_open')])]});
       return;
     }
     const tip = await askAI(`Producer searching for "${genre}" samples. One quick production tip under 25 words.`);
@@ -558,7 +558,7 @@ async function sendReleasesMessage(client, userId, genre) {
   const releases = await getNewReleases(genre || null);
   if (!releases?.length) {
     await client.chat.postMessage({ channel: userId, text: 'Error', blocks: [
-      header('❗ Could not fetch'), section('Spotify may be slow. Try again.'),
+      header('🎵 Spotify Is Taking a Nap'), section('Happens sometimes — tap retry, it usually works on the second try.'),
       actions([btn('🔄 Retry', 'releases_global')]),
     ]});
     return;
@@ -1140,7 +1140,7 @@ app.event('file_shared', async ({ event, client }) => {
       if (cs.status === 'waiting_your_track') {
         await post([header('🎵 Scanning Your Track...'), section(`*${file.name}*`), ctx('⏳ Step 1 of 2')], 'Scanning');
         const a = await analyzeAudioFile(file.url_private_download, file.name);
-        if (!a || a.error) { await post([header('❗ Scan Failed'), section('Try an MP3 or WAV under ~15MB.')], 'Error'); return; }
+        if (!a || a.error) { await post([header('🎧 Could Not Read That File'), section('This format gave me trouble. MP3 and WAV work best — try exporting again under ~15MB.'), ctx('Supported: MP3 · WAV · FLAC · M4A · OGG')], 'Error'); return; }
         cs.yourTrack = { filename: file.name, ...a };
         cs.status = 'waiting_reference';
         const hasFull = a.lufs !== undefined;
@@ -1158,7 +1158,7 @@ app.event('file_shared', async ({ event, client }) => {
       } else if (cs.status === 'waiting_reference') {
         await post([header('🔍 Scanning Reference...'), section(`*${file.name}*`), ctx('⏳ Generating comparison...')], 'Scanning');
         const a = await analyzeAudioFile(file.url_private_download, file.name);
-        if (!a || a.error) { await post([header('❗ Scan Failed'), section('Try an MP3 under ~15MB.')], 'Error'); return; }
+        if (!a || a.error) { await post([header('🎧 Could Not Read That File'), section('MP3 and WAV work best — try exporting again under ~15MB.'), ctx('Supported: MP3 · WAV · FLAC · M4A · OGG')], 'Error'); return; }
         cs.referenceTrack = { filename: file.name, ...a };
         const y = cs.yourTrack, r = cs.referenceTrack;
         clearCompareSession(userId);
@@ -1219,7 +1219,7 @@ Give specific EQ, compression fixes. Top 3 changes. Real plugin names.`;
     // ── NORMAL UPLOAD ────────────────────────────────────
     await post([header('🎵 Scanning Your Track...'), section(`*${file.name}*`), ctx('⏳ Deep analysis: loudness, stereo, spectral...')], 'Scanning');
     const a = await analyzeAudioFile(file.url_private_download, file.name);
-    if (!a || a.error) { await post([header('❗ Scan Failed'), section('Try an MP3 or WAV under ~15MB.')], 'Error'); return; }
+    if (!a || a.error) { await post([header('🎧 Could Not Read That File'), section('This format gave me trouble. MP3 and WAV work best — try exporting again under ~15MB.'), ctx('Supported: MP3 · WAV · FLAC · M4A · OGG')], 'Error'); return; }
 
     if (userId) trackUpload(userId, file.name, a);
     global.pendingAnalysis = global.pendingAnalysis || {};
@@ -1471,7 +1471,7 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
     await send([section(`🔍 Finding *"${q}"* samples...`), ctx('⏳ Different results every search')], 'Searching');
     const sounds = await searchFreesound(q, userId);
     if (!sounds?.length) {
-      await send([header('❗ No Results'), section(`No sounds for *"${q}"*\n\nTry: piano · drums · bass · guitar · synth`), section(`🔗 *<https://freesound.org/search/?q=${encodeURIComponent(q)}|Browse Freesound>*`)], 'No results');
+      await send([header('🎵 Nothing Found — Yet'), section(`No sounds matched *"${q}"*. The library has 500K+ sounds, so try a broader word:`), actions([btn('🥁 Drums', 'samples_drums'), btn('🎹 Piano', 'samples_piano'), btn('🎸 Bass', 'samples_bass'), btn('🎷 Synth', 'samples_synth')]), section(`🔗 *<https://freesound.org/search/?q=${encodeURIComponent(q)}|Or browse Freesound directly>*`)], 'No results');
       return;
     }
     const tip = await askAI(`Producer needs "${q}" samples. 2 quick tips under 40 words. Bullets.`);
@@ -1569,7 +1569,7 @@ Be direct and specific. Use the actual numbers.`;
     else if (/\svs\s/i.test(artists)) [a1,a2] = artists.split(/\s+vs\s+/i).map(s=>s.trim());
     else { const w=artists.split(' '); const m=Math.ceil(w.length/2); a1=w.slice(0,m).join(' '); a2=w.slice(m).join(' '); }
     const [s1,s2] = await Promise.all([getArtistStats(a1), getArtistStats(a2)]);
-    if (!s1||!s2) { await send([header('❗ Not Found'), section('`/wavmind artist Drake and Travis Scott`')], 'Error'); return; }
+    if (!s1||!s2) { await send([header('🎤 Could Not Find Those Artists'), section('Check the spelling and use this format:\n`/wavmind artist Drake and Travis Scott`'), actions([btn('🎤 Try Preset Pairs', 'artist_open')])], 'Error'); return; }
     const ai = await askAI(`Compare: ${s1.name} (BPM ${s1.bpm}, Energy ${s1.energy}%, Key ${s1.key}) vs ${s2.name} (BPM ${s2.bpm}, Energy ${s2.energy}%, Key ${s2.key}). Key production differences, how to blend.`);
     await send([
       header('🎤 Artist Comparison'),
@@ -1640,35 +1640,35 @@ Be direct and specific. Use the actual numbers.`;
   }
   if (lower.startsWith('idea ')) {
     const t=input.slice(5).trim(); const s=getCollabSession(command.channel_id);
-    if (!s) { await send([header('❗ No Session'), section('`/wavmind collab [track name]`')], 'No session'); return; }
+    if (!s) { await send([header('🤝 No Session Running'), section('Start a collab session first, then log ideas, notes and decisions with your team.\n\n`/wavmind collab Dark Trap EP`'), ctx('💡 Works best in a shared channel with your team')], 'No session'); return; }
     s.ideas.push({ text: t, user: userId, time: new Date().toISOString() });
     await respond({ response_type:'in_channel', text:'Idea logged', blocks:[header('💡 Idea Logged'),section(`*"${t}"*\n— <@${userId}>`),ctx(`${s.ideas.length} ideas for "${s.trackName}"`)] });
     return;
   }
   if (lower.startsWith('note ')) {
     const t=input.slice(5).trim(); const s=getCollabSession(command.channel_id);
-    if (!s) { await send([header('❗ No Session'), section('`/wavmind collab [track name]`')], 'No session'); return; }
+    if (!s) { await send([header('🤝 No Session Running'), section('Start a collab session first, then log ideas, notes and decisions with your team.\n\n`/wavmind collab Dark Trap EP`'), ctx('💡 Works best in a shared channel with your team')], 'No session'); return; }
     s.feedback.push({ text: t, user: userId, time: new Date().toISOString() });
     await respond({ response_type:'in_channel', text:'Note logged', blocks:[header('📝 Note Logged'),section(`*"${t}"*\n— <@${userId}>`),ctx(`${s.feedback.length} notes for "${s.trackName()}"`)] });
     return;
   }
   if (lower.startsWith('decided ')) {
     const t=input.slice(8).trim(); const s=getCollabSession(command.channel_id);
-    if (!s) { await send([header('❗ No Session'), section('`/wavmind collab [track name]`')], 'No session'); return; }
+    if (!s) { await send([header('🤝 No Session Running'), section('Start a collab session first, then log ideas, notes and decisions with your team.\n\n`/wavmind collab Dark Trap EP`'), ctx('💡 Works best in a shared channel with your team')], 'No session'); return; }
     s.decisions.push({ text: t, user: userId, time: new Date().toISOString() });
     await respond({ response_type:'in_channel', text:'Decision logged', blocks:[header('✅ Decision Logged'),section(`*"${t}"*\n— <@${userId}>`),ctx(`${s.decisions.length} decisions for "${s.trackName}"`)] });
     return;
   }
   if (lower === 'summary') {
     const s=getCollabSession(command.channel_id);
-    if (!s) { await send([header('❗ No Session'), section('`/wavmind collab [track name]`')], 'No session'); return; }
+    if (!s) { await send([header('🤝 No Session Running'), section('Start a collab session first, then log ideas, notes and decisions with your team.\n\n`/wavmind collab Dark Trap EP`'), ctx('💡 Works best in a shared channel with your team')], 'No session'); return; }
     const r = await askAI(`Summarize collab for "${s.trackName}": IDEAS: ${s.ideas.map(i=>i.text).join(', ')||'None'} NOTES: ${s.feedback.map(f=>f.text).join(', ')||'None'} DECISIONS: ${s.decisions.map(d=>d.text).join(', ')||'None'}. Overview, direction, next steps.`);
     await respond({ response_type:'in_channel', text:'Summary', blocks:[header('📋 Session Summary'),section(`*"${s.trackName}"*`),divider(),twoCol(`💡 ${s.ideas.length} ideas`,`📝 ${s.feedback.length} notes`),twoCol(`✅ ${s.decisions.length} decisions`,`⏱️ ${new Date(s.startedAt).toLocaleTimeString()}`),divider(),section(r||'Error'),ctx('`/wavmind end` to finish')] });
     return;
   }
   if (lower === 'end') {
     const s=getCollabSession(command.channel_id);
-    if (!s) { await send([header('❗ No Active Session')], 'No session'); return; }
+    if (!s) { await send([header('🤝 Nothing to End'), section('No collab session is running in this channel.\n\nStart one: `/wavmind collab [track name]`')], 'No session'); return; }
     const r = await askAI(`Final report for "${s.trackName}": IDEAS: ${s.ideas.map(i=>i.text).join(', ')||'None'} NOTES: ${s.feedback.map(f=>f.text).join(', ')||'None'} DECISIONS: ${s.decisions.map(d=>d.text).join(', ')||'None'}. Overview, decisions, action items.`);
     endCollabSession(command.channel_id);
     await respond({ response_type:'in_channel', text:'Session complete', blocks:[header('🏁 Session Complete'),section(`*"${s.trackName}"*`),divider(),section(r||'Error'),ctx('`/wavmind collab [name]` for new session')] });
@@ -1693,7 +1693,7 @@ Be direct and specific. Use the actual numbers.`;
   if (lower === 'test reminder') {
     const ul = global.userUploads[userId] || [];
     const last = ul[ul.length - 1];
-    if (!last) { await send([header('❗ Upload a track first')], 'No track'); return; }
+    if (!last) { await send([header('🎵 No Tracks Scanned Yet'), section('Upload an MP3 or WAV first — Wavmind will scan it, then you can test the reminder feature.'), ctx('Drag any audio file into this chat to start')], 'No track'); return; }
     if (!global.pendingReminders[userId]) global.pendingReminders[userId] = [];
     global.pendingReminders[userId].push({ filename: last.filename, analysis: last.analysis, uploadedAt: new Date().toISOString(), remindAt: new Date(Date.now() + 10000).toISOString(), sent: false });
     saveReminders(global.pendingReminders);
@@ -1706,7 +1706,7 @@ Be direct and specific. Use the actual numbers.`;
     const genre = input.replace(/^new releases?\s*/i, '').trim();
     await send([header('🆕 Latest on Spotify...'), ctx('⏳ Fetching new releases')], 'Fetching');
     const releases = await getNewReleases(genre || null);
-    if (!releases?.length) { await send([header('❗ Could not fetch'), section('Try again shortly.')], 'Error'); return; }
+    if (!releases?.length) { await send([header('🎵 Spotify Is Taking a Nap'), section('Tap below to retry — it usually works second time.'), actions([btn('🔄 Retry', 'releases_refresh')])], 'Error'); return; }
     const bl = [header(`🆕 New Releases${genre ? ` — ${genre}` : ''}`), section(`*${releases.length} fresh tracks* — _Different results every time_`), divider()];
     releases.forEach((rel, i) => {
       bl.push(section(`*${i+1}. ${rel.name}*\n👤 ${rel.artist}${rel.album ? `  💿 ${rel.album}` : ''}  📅 ${rel.releaseDate}  🔥 ${rel.popularity}%\n🎵 *<${rel.url}|▶ Listen on Spotify>*`));
@@ -1741,7 +1741,7 @@ Be direct and specific. Use the actual numbers.`;
     if (!subL || subL === 'list' || subL === 'all') {
       const projects = global.userProjects[userId] || [];
       if (!projects.length) {
-        await send([header('📌 Project Tracker'), section('No projects yet.'), actions([btn('➕ Add Project', 'project_add_prompt', 'primary')])], 'Projects');
+        await send([header('📌 Your Project Board Is Empty'), section('Every great track starts with a name. Add your first project and Wavmind will keep you accountable with daily reminders.'), actions([btn('➕ Start My First Project', 'project_add_prompt', 'primary')]), ctx('💡 Producers who track projects finish 2x more tracks')], 'Projects');
         return;
       }
       const active = projects.filter(p => !p.done);
