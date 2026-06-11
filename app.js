@@ -680,7 +680,7 @@ app.action('ref_custom', async ({ body, ack, client }) => {
   await ack();
   await client.chat.postMessage({ channel: body.user.id, text: 'Reference', blocks: [
     header('🔍 Search Any Song'),
-    section('Type the song + artist name:\\n`/wavmind reference Blinding Lights The Weeknd`\\n`/wavmind reference Gods Plan Drake`\\n`/wavmind reference Essence Wizkid`'),
+    section('Type the song + artist name:\n`/wavmind reference Blinding Lights The Weeknd`\n`/wavmind reference Gods Plan Drake`\n`/wavmind reference Essence Wizkid`'),
     ctx('Uses real Spotify data — works for any song'),
   ]});
 });
@@ -1075,10 +1075,9 @@ async function publishAppHome(client, userId) {
     }
 
     // CAPABILITIES
-    blocks.push(header('⚡ What Can Wavmind Do?'));
-    blocks.push(twoCol('*🆚 Compare Tracks*\nYour mix vs reference → side-by-side gap analysis + AI fix plan', '*🎵 Free Samples*\n500K+ Creative Commons sounds · Different every search'));
-    blocks.push(twoCol('*🎤 Artist DNA*\nCompare two artists using real Spotify data\n`/wavmind artist Drake and Travis Scott`', '*🎸 DAW Help*\nStep-by-step tutorials via AI + real-time web search'));
-    blocks.push(twoCol('*🤝 Collab Sessions*\nLog ideas, notes and decisions as a team · AI summary', '*🔍 Reference Analysis*\nReal Spotify audio features + production blueprint'));
+    blocks.push(header('⚡ Everything Wavmind Does'));
+    blocks.push(section('🆚 *Compare Tracks* — your mix vs any reference, with an AI fix plan\n🎵 *Free Samples* — 500K+ sounds, different results every search\n🎤 *Artist DNA* — compare any two artists with real Spotify data\n🎸 *DAW Help* — step-by-step tutorials for 8 DAWs\n🤝 *Collab Sessions* — team idea logging with AI summaries\n🔍 *Reference Analysis* — production blueprint for any song\n🎚️ *Mix Feedback* — based on real measured audio data\n🎓 *DAW Guru* — daily personalized lessons\n📌 *Projects* — tracking with daily reminders\n🆕 *New Releases* — fresh Spotify drops by genre'));
+    blocks.push(ctx('👆 Every feature is one tap away using the buttons above'));
     blocks.push(divider());
 
     // AUTONOMOUS
