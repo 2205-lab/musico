@@ -122,6 +122,35 @@ const btn     = (text, actionId, style) => {
 const actions = btns => ({ type: 'actions', elements: btns });
 
 // ─── LOUDNESS HELPERS ─────────────────────────────────────
+// Convert raw analysis numbers into human/AI-friendly descriptions
+function describeAnalysis(a) {
+  const parts = [];
+  if (a.lufs !== undefined) {
+    const l = a.lufs > -8 ? 'very loud, possibly over-compressed' : a.lufs > -11 ? 'loud, club level' : a.lufs >= -15 ? 'streaming-ready loudness' : a.lufs >= -20 ? 'slightly quiet' : 'quiet, needs mastering';
+    parts.push(`Loudness: ${l} (${a.lufs} LUFS)`);
+  }
+  if (a.stereo_width !== undefined) {
+    const s = a.stereo_width < 10 ? 'essentially mono — very narrow' : a.stereo_width < 25 ? 'narrow stereo image' : a.stereo_width < 50 ? 'normal stereo width' : 'wide stereo image';
+    parts.push(`Stereo: ${s}`);
+  }
+  if (a.low_pct !== undefined) {
+    const b = a.low_pct > 60 ? 'bass-heavy, likely muddy' : a.low_pct > 40 ? 'balanced bass' : a.low_pct > 20 ? 'light bass' : 'very thin bass';
+    parts.push(`Bass: ${b}`);
+    const h = a.high_pct > 20 ? 'bright high end' : a.high_pct > 8 ? 'balanced highs' : a.high_pct > 3 ? 'dull highs, lacks air' : 'very dull, no sparkle';
+    parts.push(`Highs: ${h}`);
+  }
+  if (a.vocal_clarity !== undefined) {
+    const v = a.vocal_clarity >= 60 ? 'vocals clear and present' : a.vocal_clarity >= 35 ? 'vocals balanced in mix' : a.vocal_clarity >= 15 ? 'vocals slightly buried' : 'vocals very buried, need presence';
+    parts.push(`Vocals: ${v}`);
+  }
+  if (a.energy !== undefined) {
+    const e = a.energy >= 75 ? 'high energy, punchy' : a.energy >= 50 ? 'good energy' : a.energy >= 30 ? 'low energy, lacks punch' : 'very low energy';
+    parts.push(`Energy: ${e}`);
+  }
+  if (a.brightness) parts.push(`Overall tone: ${a.brightness}`);
+  return parts.join('. ');
+}
+
 function vocalClarityLabel(vc) {
   if (!vc && vc !== 0) return '—';
   if (vc >= 65) return `${vc}% — Clear ✅`;
@@ -243,30 +272,84 @@ async function getTrackFeatures(trackName) {
   try {
     const token = await getSpotifyToken();
     const q = trackName.trim().replace(/\s+/g, ' ');
-    let sr = await axios.get('https://api.spotify.com/v1/search', { headers: { Authorization: `Bearer ${token}` }, params: { q, type: 'track', limit: 1, market: 'US' } });
-    let track = sr.data.tracks.items[0];
+    let sr = await axios.get('https://api.spotify.com/v1/search', { headers: { Authorization: `Bearer ${token}` }, params: { q, type: 'track', limit: 1, market: 'US' }, timeout: 10000 });
+    let track = sr.data.tracks?.items?.[0];
     if (!track) {
       const simple = q.split(/[-–]|by/i)[0].trim();
-      sr = await axios.get('https://api.spotify.com/v1/search', { headers: { Authorization: `Bearer ${token}` }, params: { q: simple, type: 'track', limit: 1, market: 'US' } });
-      track = sr.data.tracks.items[0];
+      sr = await axios.get('https://api.spotify.com/v1/search', { headers: { Authorization: `Bearer ${token}` }, params: { q: simple, type: 'track', limit: 1, market: 'US' }, timeout: 10000 });
+      track = sr.data.tracks?.items?.[0];
       if (!track) return null;
     }
-    const f = await axios.get(`https://api.spotify.com/v1/audio-features/${track.id}`, { headers: { Authorization: `Bearer ${token}` } });
-    const keys = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-    return { name: track.name, artist: track.artists[0].name, bpm: Math.round(f.data.tempo), key: keys[f.data.key] + ' ' + ['Minor','Major'][f.data.mode], energy: Math.round(f.data.energy * 100), danceability: Math.round(f.data.danceability * 100), loudness: f.data.loudness.toFixed(1), valence: Math.round(f.data.valence * 100) };
+    // Note: Spotify deprecated /audio-features — use AI for production data, Spotify for verified metadata
+    const aiData = await askAI(`You are a music production database. For the song "${track.name}" by "${track.artists[0].name}", give ONLY this exact format with real known values (estimate if needed):
+BPM: [number]
+KEY: [key like F Minor]
+ENERGY: [0-100]
+DANCE: [0-100]
+MOOD: [one word]
+No other text.`);
+    let bpm = '—', key = '—', energy = '—', dance = '—', mood = '—';
+    if (aiData) {
+      const bpmM = aiData.match(/BPM:\s*(\d+)/i);
+      const keyM = aiData.match(/KEY:\s*([A-G][#b]?\s*(?:Minor|Major|minor|major))/i);
+      const enM  = aiData.match(/ENERGY:\s*(\d+)/i);
+      const daM  = aiData.match(/DANCE:\s*(\d+)/i);
+      const moM  = aiData.match(/MOOD:\s*(\w+)/i);
+      if (bpmM) bpm = bpmM[1];
+      if (keyM) key = keyM[1];
+      if (enM)  energy = enM[1];
+      if (daM)  dance = daM[1];
+      if (moM)  mood = moM[1];
+    }
+    return {
+      name: track.name,
+      artist: track.artists[0].name,
+      album: track.album?.name || '',
+      releaseDate: track.album?.release_date || '',
+      popularity: track.popularity || 0,
+      url: track.external_urls?.spotify || '',
+      bpm, key, energy, danceability: dance, mood,
+    };
   } catch (e) { console.error('Spotify track:', e.message); return null; }
 }
 async function getArtistStats(name) {
   try {
     const token = await getSpotifyToken();
-    const sr = await axios.get('https://api.spotify.com/v1/search', { headers: { Authorization: `Bearer ${token}` }, params: { q: name, type: 'track', limit: 5 } });
-    const tracks = sr.data.tracks.items;
-    if (!tracks.length) return null;
-    const fRes = await Promise.all(tracks.map(t => axios.get(`https://api.spotify.com/v1/audio-features/${t.id}`, { headers: { Authorization: `Bearer ${token}` } })));
-    const feats = fRes.map(r => r.data);
-    const avg = k => Math.round(feats.reduce((s, f) => s + f[k], 0) / feats.length);
-    const keys = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-    return { name, bpm: avg('tempo'), energy: Math.round(avg('energy')), danceability: Math.round(avg('danceability')), valence: Math.round(avg('valence')), loudness: (feats.reduce((s,f)=>s+f.loudness,0)/feats.length).toFixed(1), key: keys[Math.abs(avg('key'))%12]+' '+['Minor','Major'][avg('mode')>0?1:0] };
+    const sr = await axios.get('https://api.spotify.com/v1/search', { headers: { Authorization: `Bearer ${token}` }, params: { q: name, type: 'artist', limit: 1 }, timeout: 10000 });
+    const artist = sr.data.artists?.items?.[0];
+    if (!artist) return null;
+    // Get top track names for AI context
+    let topTracks = [];
+    try {
+      const tt = await axios.get(`https://api.spotify.com/v1/artists/${artist.id}/top-tracks`, { headers: { Authorization: `Bearer ${token}` }, params: { market: 'US' }, timeout: 10000 });
+      topTracks = (tt.data.tracks || []).slice(0, 5).map(t => t.name);
+    } catch (e) {}
+    // AI fills production stats (audio-features endpoint deprecated)
+    const aiData = await askAI(`You are a music production database. For artist "${artist.name}" (top tracks: ${topTracks.join(', ') || 'unknown'}), give ONLY this format with realistic typical values:
+BPM: [typical number]
+KEY: [most common key like F Minor]
+ENERGY: [0-100]
+STYLE: [3-word style description]
+No other text.`);
+    let bpm = '—', key = '—', energy = '—', style = '—';
+    if (aiData) {
+      const bpmM = aiData.match(/BPM:\s*(\d+)/i);
+      const keyM = aiData.match(/KEY:\s*([A-G][#b]?\s*(?:Minor|Major|minor|major))/i);
+      const enM  = aiData.match(/ENERGY:\s*(\d+)/i);
+      const stM  = aiData.match(/STYLE:\s*(.+)/i);
+      if (bpmM) bpm = bpmM[1];
+      if (keyM) key = keyM[1];
+      if (enM)  energy = enM[1];
+      if (stM)  style = stM[1].trim();
+    }
+    return {
+      name: artist.name,
+      followers: artist.followers?.total || 0,
+      popularity: artist.popularity || 0,
+      genres: (artist.genres || []).slice(0, 3).join(', ') || '—',
+      topTracks: topTracks.slice(0, 3).join(', ') || '—',
+      bpm, key, energy, style,
+    };
   } catch (e) { console.error('Spotify artist:', e.message); return null; }
 }
 
@@ -472,9 +555,7 @@ app.action('quick_feedback', async ({ body, ack, client }) => {
     header('🎚️ Analyzing your mix...'), section(`*${stored.filename}*`), ctx('⏳ Generating feedback from scan data'),
   ]});
   const hasFull = stored.lufs !== undefined;
-  const dataStr = hasFull
-    ? `Loudness: ${stored.lufs} LUFS, Stereo width: ${stored.stereo_width}%, Bass/Low: ${stored.low_pct}%, Mids: ${stored.mid_pct}%, Highs: ${stored.high_pct}%, Energy: ${stored.energy}%, Vocal clarity score: ${stored.vocal_clarity}%, Brightness: ${stored.brightness}, Duration: ${stored.duration}s`
-    : `Energy: ${stored.energy}%, Bass: ${stored.bass_ratio}%, Brightness: ${stored.brightness}, Duration: ${stored.duration}s`;
+  const dataStr = describeAnalysis(stored);
   const prompt = `You are a professional mixing and mastering engineer. Here is real measured audio analysis data for the track "${stored.filename}":
 ${dataStr}
 
@@ -650,7 +731,7 @@ Object.entries(REF_TRACKS).forEach(([actionId, trackName]) => {
       ]});
       return;
     }
-    const ai = await askAI(`How to achieve the sound of ${f.name} by ${f.artist}: BPM ${f.bpm}, Key ${f.key}, Energy ${f.energy}%, Loudness ${f.loudness}dB. Specific techniques and real plugin names.`);
+    const ai = await askAI(`How to achieve the sound of ${f.name} by ${f.artist}: BPM ${f.bpm}, Key ${f.key}, Energy ${f.energy}%, Mood ${f.mood}. Specific techniques and real plugin names.`);
     await client.chat.postMessage({ channel: userId, text: 'Reference', blocks: [
       header(`🎵 ${f.name} — ${f.artist}`),
       divider(),
@@ -661,9 +742,9 @@ ${f.key}`),
       twoCol(`⚡ *Energy*
 ${f.energy}%`, `💃 *Danceability*
 ${f.danceability}%`),
-      twoCol(`🔊 *Loudness*
-${f.loudness} dB`, `😊 *Valence*
-${f.valence}%`),
+      twoCol(`🔥 *Popularity*
+${f.popularity}%`, `😊 *Mood*
+${f.mood}`),
       divider(),
       section('🎛️ *How to sound like this:*'),
       section(ai || 'Error generating blueprint.'),
@@ -765,7 +846,7 @@ Object.entries(ARTIST_PAIRS).forEach(([actionId, [a1, a2]]) => {
       await client.chat.postMessage({ channel: userId, text: 'Error', blocks: [header('❗ Could not fetch'), section('Try again shortly.')]});
       return;
     }
-    const ai = await askAI(`Compare production styles: ${s1.name} (BPM ${s1.bpm}, Energy ${s1.energy}%, Key ${s1.key}, Loudness ${s1.loudness}dB) vs ${s2.name} (BPM ${s2.bpm}, Energy ${s2.energy}%, Key ${s2.key}, Loudness ${s2.loudness}dB). Key differences and how to blend both styles.`);
+    const ai = await askAI(`Compare production styles: ${s1.name} (BPM ${s1.bpm}, Energy ${s1.energy}%, Key ${s1.key}, Style: ${s1.style}, Genres: ${s1.genres}) vs ${s2.name} (BPM ${s2.bpm}, Energy ${s2.energy}%, Key ${s2.key}, Style: ${s2.style}, Genres: ${s2.genres}). Key differences and how to blend both styles.`);
     await client.chat.postMessage({ channel: userId, text: 'Artist Compare', blocks: [
       header(`🎤 ${s1.name} vs ${s2.name}`),
       divider(),
@@ -773,7 +854,8 @@ Object.entries(ARTIST_PAIRS).forEach(([actionId, [a1, a2]]) => {
       { type:'section', fields:[{type:'mrkdwn',text:`*${s1.name}*`},{type:'mrkdwn',text:`*${s2.name}*`}] },
       { type:'section', fields:[{type:'mrkdwn',text:`🥁 BPM: *${s1.bpm}*`},{type:'mrkdwn',text:`🥁 BPM: *${s2.bpm}*`}] },
       { type:'section', fields:[{type:'mrkdwn',text:`⚡ Energy: *${s1.energy}%*`},{type:'mrkdwn',text:`⚡ Energy: *${s2.energy}%*`}] },
-      { type:'section', fields:[{type:'mrkdwn',text:`🔊 Loud: *${s1.loudness}dB*`},{type:'mrkdwn',text:`🔊 Loud: *${s2.loudness}dB*`}] },
+      { type:'section', fields:[{type:'mrkdwn',text:`🔥 Pop: *${s1.popularity}%*`},{type:'mrkdwn',text:`🔥 Pop: *${s2.popularity}%*`}] },
+      { type:'section', fields:[{type:'mrkdwn',text:`🎼 *${s1.genres}*`},{type:'mrkdwn',text:`🎼 *${s2.genres}*`}] },
       { type:'section', fields:[{type:'mrkdwn',text:`🎵 Key: *${s1.key}*`},{type:'mrkdwn',text:`🎵 Key: *${s2.key}*`}] },
       divider(),
       section(ai || 'Error'),
@@ -1076,7 +1158,10 @@ async function publishAppHome(client, userId) {
 
     // CAPABILITIES
     blocks.push(header('⚡ Everything Wavmind Does'));
-    blocks.push(section('🆚 *Compare Tracks* — your mix vs any reference, with an AI fix plan\n🎵 *Free Samples* — 500K+ sounds, different results every search\n🎤 *Artist DNA* — compare any two artists with real Spotify data\n🎸 *DAW Help* — step-by-step tutorials for 8 DAWs\n🤝 *Collab Sessions* — team idea logging with AI summaries\n🔍 *Reference Analysis* — production blueprint for any song\n🎚️ *Mix Feedback* — based on real measured audio data\n🎓 *DAW Guru* — daily personalized lessons\n📌 *Projects* — tracking with daily reminders\n🆕 *New Releases* — fresh Spotify drops by genre'));
+    blocks.push(section('*🎧 Audio Intelligence*\nUpload any track for instant analysis · Compare against references · Get mix feedback from real measurements'));
+    blocks.push(section('*🎓 Learn & Grow*\nDaily DAW lessons at your level · Step-by-step tutorials for 8 DAWs · Production blueprints for any song'));
+    blocks.push(section('*🎵 Create & Discover*\n500K+ free samples · Fresh Spotify releases by genre · Artist DNA comparisons'));
+    blocks.push(section('*🤝 Stay On Track*\nProject tracking with daily reminders · Team collab sessions · Weekly production reports'));
     blocks.push(ctx('👆 Every feature is one tap away using the buttons above'));
     blocks.push(divider());
 
@@ -1145,8 +1230,10 @@ app.event('file_shared', async ({ event, client }) => {
         const hasFull = a.lufs !== undefined;
         const bl = [header('✅ Your Track Scanned — Step 1 of 2'), section(`*${file.name}*`), divider()];
         if (hasFull) {
-          bl.push(twoCol(`🔊 *Loudness*\n${loudnessLabel(a.lufs)}`, `🎚️ *Stereo*\n${a.stereo_width}%`));
-          bl.push(twoCol(`📊 *Low/Mid/High*\n${a.low_pct}/${a.mid_pct}/${a.high_pct}%`, `⚡ *Energy*\n${a.energy}%`));
+          const sLbl = a.stereo_width < 10 ? 'Mono/Narrow' : a.stereo_width < 25 ? 'Narrow' : a.stereo_width < 50 ? 'Normal' : 'Wide';
+          const eLbl = a.energy >= 75 ? 'High' : a.energy >= 50 ? 'Good' : 'Low';
+          bl.push(twoCol(`🔊 *Loudness*\n${loudnessLabel(a.lufs)}`, `🎚️ *Stereo*\n${sLbl}`));
+          bl.push(twoCol(`🔉 *Bass*\n${a.low_pct > 60 ? 'Heavy' : a.low_pct > 40 ? 'Balanced' : 'Light'}`, `⚡ *Energy*\n${eLbl}`));
         } else {
           bl.push(twoCol(`⚡ *Energy*\n${a.energy}%`, `🔊 *Bass*\n${a.bass_ratio}%`));
           bl.push(twoCol(`🌈 *Brightness*\n${a.brightness}`, `⏱️ *Duration*\n${Math.floor(a.duration/60)}:${String(a.duration%60).padStart(2,'0')}`));
@@ -1166,12 +1253,12 @@ app.event('file_shared', async ({ event, client }) => {
 
         // Build AI prompt with all available data
         const aiPrompt = hasFull
-          ? `Professional mastering engineer. Compare and give specific fixes (EQ in Hz, compression, real plugin names).
+          ? `Professional mastering engineer. Compare these two tracks and give specific fixes (EQ in Hz, compression, real plugin names).
 
-MY TRACK "${y.filename}": loudness ${y.lufs} LUFS, stereo ${y.stereo_width}%, low/mid/high ${y.low_pct}/${y.mid_pct}/${y.high_pct}%, brightness ${y.spectral_centroid}Hz, energy ${y.energy}%
-REFERENCE "${r.filename}": loudness ${r.lufs} LUFS, stereo ${r.stereo_width}%, low/mid/high ${r.low_pct}/${r.mid_pct}/${r.high_pct}%, brightness ${r.spectral_centroid}Hz, energy ${r.energy}%
+MY TRACK "${y.filename}": ${describeAnalysis(y)}
+REFERENCE "${r.filename}": ${describeAnalysis(r)}
 
-Give: 1) Loudness fix 2) Spectral/frequency fix 3) Stereo width fix 4) Energy fix. Then "Top 3 moves to match the reference".`
+Give: 1) Loudness fix 2) Frequency balance fix 3) Stereo width fix 4) Energy fix. Then "Top 3 moves to match the reference". Use plain language, no percentages.`
           : `Professional mixing engineer. Compare:
 MY TRACK "${y.filename}": energy ${y.energy}%, brightness ${y.brightness}, bass ${y.bass_ratio}%
 REFERENCE "${r.filename}": energy ${r.energy}%, brightness ${r.brightness}, bass ${r.bass_ratio}%
@@ -1187,18 +1274,19 @@ Give specific EQ, compression fixes. Top 3 changes. Real plugin names.`;
         ];
 
         if (hasFull) {
-          const gap = (mine, ref, unit, within) => {
-            const diff = +(ref - mine).toFixed(1);
-            const st = Math.abs(diff) <= within ? '✅ Match' : diff > 0 ? '🔴 Ref higher' : '🟢 Yours higher';
-            return `${mine}${unit} → ${ref}${unit}  ${st}`;
+          // Descriptive comparison — no raw numbers
+          const cmp = (mine, ref, within, lowWord, highWord) => {
+            const diff = ref - mine;
+            if (Math.abs(diff) <= within) return '✅ Matched — no change needed';
+            return diff > 0 ? `🔴 Reference is ${highWord} — yours needs more` : `🟡 Yours is ${highWord} — consider reducing`;
           };
           bl.push(section([
-            `🔊 *Loudness* — ${gap(y.lufs, r.lufs, ' LUFS', 1.5)}`,
-            `🎚️ *Stereo Width* — ${gap(y.stereo_width, r.stereo_width, '%', 8)}`,
-            `🟥 *Lows* — ${gap(y.low_pct, r.low_pct, '%', 5)}`,
-            `🟩 *Mids* — ${gap(y.mid_pct, r.mid_pct, '%', 5)}`,
-            `🟦 *Highs* — ${gap(y.high_pct, r.high_pct, '%', 5)}`,
-            `⚡ *Energy* — ${gap(y.energy, r.energy, '%', 6)}`,
+            `🔊 *Loudness* — ${cmp(y.lufs, r.lufs, 1.5, 'quieter', 'louder')}`,
+            `🎚️ *Stereo Width* — ${cmp(y.stereo_width, r.stereo_width, 8, 'narrower', 'wider')}`,
+            `🔉 *Bass* — ${cmp(y.low_pct, r.low_pct, 5, 'lighter', 'heavier')}`,
+            `🎸 *Mids* — ${cmp(y.mid_pct, r.mid_pct, 5, 'thinner', 'fuller')}`,
+            `✨ *Highs* — ${cmp(y.high_pct, r.high_pct, 5, 'duller', 'brighter')}`,
+            `⚡ *Energy* — ${cmp(y.energy, r.energy, 6, 'calmer', 'punchier')}`,
           ].join('\n')));
         } else {
           const ed = r.energy - y.energy, bd = r.bass_ratio - y.bass_ratio;
@@ -1216,7 +1304,7 @@ Give specific EQ, compression fixes. Top 3 changes. Real plugin names.`;
     }
 
     // ── NORMAL UPLOAD ────────────────────────────────────
-    await post([header('🎵 Scanning Your Track...'), section(`*${file.name}*`), ctx('⏳ Deep analysis: loudness, stereo, spectral...')], 'Scanning');
+    await post([header('🎵 Scanning Your Track...'), section(`*${file.name}*`), ctx('⏳ Deep analysis in progress — this can take up to a minute for longer tracks')], 'Scanning');
     const a = await analyzeAudioFile(file.url_private_download, file.name);
     if (!a || a.error) { await post([header('🎧 Could Not Read That File'), section('This format gave me trouble. MP3 and WAV work best — try exporting again under ~15MB.'), ctx('Supported: MP3 · WAV · FLAC · M4A · OGG')], 'Error'); return; }
 
@@ -1267,8 +1355,10 @@ function startScheduler(client) {
       let changed = false;
       for (const userId of Object.keys(global.pendingReminders)) {
         for (const rem of global.pendingReminders[userId]) {
-          if (rem.sent || new Date(rem.remindAt) > now) continue;
+          if (rem.sent || rem.sending || new Date(rem.remindAt) > now) continue;
+          rem.sending = true;          // lock immediately to prevent double-fire
           rem.sent = true;
+          saveReminders(global.pendingReminders);  // persist lock instantly
           changed = true;
           console.log(`📬 Reminder → ${userId} for "${rem.filename}"`);
           const a = rem.analysis;
@@ -1298,7 +1388,7 @@ function startScheduler(client) {
   };
 
   checkReminders();
-  setInterval(checkReminders, 5 * 60 * 1000);
+  setInterval(checkReminders, 30 * 1000);  // every 30s — fast test reminders, low cost
 
   // Weekly digest every Monday 9am
   const sendDigest = async () => {
@@ -1492,8 +1582,8 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
     await send([header('🔍 Looking up on Spotify...'), section(`*${q}*`), ctx('⏳')], 'Searching');
     const f = await getTrackFeatures(q);
     if (f) {
-      const r = await askAI(`How to achieve sound of ${f.name} by ${f.artist}: BPM ${f.bpm}, Key ${f.key}, Energy ${f.energy}%, Loudness ${f.loudness}dB. Specific techniques + real plugins.`);
-      await send([header('🎵 Reference Analysis'), section(`*${f.name}* by *${f.artist}*`), divider(), section('📊 *Real Spotify Data*'), twoCol(`🥁 *BPM*\n${f.bpm}`, `🎵 *Key*\n${f.key}`), twoCol(`⚡ *Energy*\n${f.energy}%`, `💃 *Danceability*\n${f.danceability}%`), twoCol(`🔊 *Loudness*\n${f.loudness} dB`, `😊 *Valence*\n${f.valence}%`), divider(), section('🎛️ *How to achieve this sound:*'), section(r || 'Error'), divider(), ctx('Type `/wavmind compare` to compare your track against this')], 'Reference');
+      const r = await askAI(`How to achieve sound of ${f.name} by ${f.artist}: BPM ${f.bpm}, Key ${f.key}, Energy ${f.energy}%, Mood ${f.mood}. Specific techniques + real plugins.`);
+      await send([header('🎵 Reference Analysis'), section(`*${f.name}* by *${f.artist}*`), divider(), section('📊 *Track Data*'), twoCol(`🥁 *BPM*\n${f.bpm}`, `🎵 *Key*\n${f.key}`), twoCol(`⚡ *Energy*\n${f.energy}%`, `💃 *Danceability*\n${f.danceability}%`), twoCol(`🔥 *Popularity*\n${f.popularity}%`, `😊 *Mood*\n${f.mood}`), divider(), section('🎛️ *How to achieve this sound:*'), section(r || 'Error'), divider(), ctx('Type `/wavmind compare` to compare your track against this')], 'Reference');
     } else {
       const r = await askAI(`Production blueprint for "${q}". Tempo, key, drums, bass, melody, mix approach.`);
       await send([header('🎵 Reference Analysis'), section(`*${q}*`), divider(), section(r || 'Error')], 'Reference');
@@ -1511,9 +1601,7 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
       const desc = rest || 'my track';
       await send([header('🎚️ Generating Mix Feedback...'), section(`_Analyzing your uploaded track with measured data..._`), ctx('⏳')], 'Analyzing');
       const hasFull = stored.lufs !== undefined;
-      const dataStr = hasFull
-        ? `Energy: ${stored.energy}%, Loudness: ${stored.lufs} LUFS, Stereo Width: ${stored.stereo_width}%, Low: ${stored.low_pct}%, Mid: ${stored.mid_pct}%, High: ${stored.high_pct}%, Brightness: ${stored.brightness}, Vocal Clarity: ${stored.vocal_clarity}%`
-        : `Energy: ${stored.energy}%, Brightness: ${stored.brightness}, Bass: ${stored.bass_ratio}%, Duration: ${stored.duration}s`;
+      const dataStr = describeAnalysis(stored);
       const prompt = `Professional mastering engineer. Here is MEASURED audio analysis data for "${stored.filename}":
 ${dataStr}
 ${desc !== 'my track' ? `Producer notes: "${desc}"` : ''}
@@ -1564,9 +1652,18 @@ Be direct and specific. Use the actual numbers.`;
     if (!artists) { await send([header('🎤 Artist Comparison'), section('`/wavmind artist Drake and Travis Scott`\n`/wavmind artist Kanye vs Tyler the Creator`')], 'Artists'); return; }
     await send([header('🔍 Comparing Artists...'), ctx('⏳ Fetching Spotify data')], 'Comparing');
     let a1, a2;
-    if (/\sand\s/i.test(artists)) [a1,a2] = artists.split(/\s+and\s+/i).map(s=>s.trim());
-    else if (/\svs\s/i.test(artists)) [a1,a2] = artists.split(/\s+vs\s+/i).map(s=>s.trim());
-    else { const w=artists.split(' '); const m=Math.ceil(w.length/2); a1=w.slice(0,m).join(' '); a2=w.slice(m).join(' '); }
+    // Accept: and, vs, vs., versus, &, comma — all case-insensitive
+    const sepMatch = artists.match(/\s+(?:and|vs\.?|versus|&)\s+/i) || (artists.includes(',') ? [','] : null);
+    if (sepMatch) {
+      const parts = artists.split(sepMatch[0] === ',' ? ',' : /\s+(?:and|vs\.?|versus|&)\s+/i).map(s=>s.trim()).filter(Boolean);
+      a1 = parts[0]; a2 = parts[1];
+    } else {
+      const w = artists.split(' ');
+      const m = Math.ceil(w.length/2);
+      a1 = w.slice(0,m).join(' ');
+      a2 = w.slice(m).join(' ');
+    }
+    if (!a1 || !a2) { await send([header('🎤 Need Two Artists'), section('Format: `/wavmind artist Drake and Travis Scott`\nAlso works: vs, versus, &, comma')], 'Format'); return; }
     const [s1,s2] = await Promise.all([getArtistStats(a1), getArtistStats(a2)]);
     if (!s1||!s2) { await send([header('🎤 Could Not Find Those Artists'), section('Check the spelling and use this format:\n`/wavmind artist Drake and Travis Scott`'), actions([btn('🎤 Try Preset Pairs', 'artist_open')])], 'Error'); return; }
     const ai = await askAI(`Compare: ${s1.name} (BPM ${s1.bpm}, Energy ${s1.energy}%, Key ${s1.key}) vs ${s2.name} (BPM ${s2.bpm}, Energy ${s2.energy}%, Key ${s2.key}). Key production differences, how to blend.`);
@@ -1578,7 +1675,7 @@ Be direct and specific. Use the actual numbers.`;
       { type:'section', fields:[{ type:'mrkdwn', text:`*${s1.name}*` },{ type:'mrkdwn', text:`*${s2.name}*` }] },
       { type:'section', fields:[{ type:'mrkdwn', text:`🥁 BPM: *${s1.bpm}*` },{ type:'mrkdwn', text:`🥁 BPM: *${s2.bpm}*` }] },
       { type:'section', fields:[{ type:'mrkdwn', text:`⚡ Energy: *${s1.energy}%*` },{ type:'mrkdwn', text:`⚡ Energy: *${s2.energy}%*` }] },
-      { type:'section', fields:[{ type:'mrkdwn', text:`🔊 Loud: *${s1.loudness}dB*` },{ type:'mrkdwn', text:`🔊 Loud: *${s2.loudness}dB*` }] },
+      { type:'section', fields:[{ type:'mrkdwn', text:`🔥 Pop: *${s1.popularity}%*` },{ type:'mrkdwn', text:`🔥 Pop: *${s2.popularity}%*` }] },
       { type:'section', fields:[{ type:'mrkdwn', text:`🎵 Key: *${s1.key}*` },{ type:'mrkdwn', text:`🎵 Key: *${s2.key}*` }] },
       divider(),
       section(ai || 'Error'),
