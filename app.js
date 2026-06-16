@@ -1111,11 +1111,14 @@ async function publishAppHome(client, userId) {
       blocks.push(header('🎵 Last Track Scanned'));
       blocks.push(section(`*${last.filename}*\n_${new Date(last.timestamp).toLocaleDateString()}_`));
       if (a.lufs !== undefined) {
-        const vcLabel = a.vocal_clarity >= 65 ? 'Clear ✅' : a.vocal_clarity >= 40 ? 'Balanced' : 'Needs boost';
-        blocks.push(twoCol(`🔊 *Loudness*\n${loudnessLabel(a.lufs)}`, `🎚️ *Stereo*\n${a.stereo_width}% ${a.stereo_width < 15 ? '— Narrow' : a.stereo_width > 50 ? '— Wide ✅' : '— Normal'}`));
-        blocks.push(twoCol(`🎤 *Vocals*\n${a.vocal_clarity}% — ${vcLabel}`, `⚡ *Energy*\n${a.energy}%`));
+        const vcLabel = a.vocal_clarity >= 60 ? 'Clear ✅' : a.vocal_clarity >= 35 ? 'Balanced' : a.vocal_clarity >= 15 ? 'Needs boost' : 'Low — add presence';
+        const stLabel = a.stereo_width < 10 ? 'Mono / Very narrow' : a.stereo_width < 25 ? 'Narrow' : a.stereo_width < 50 ? 'Normal ✅' : 'Wide ✅';
+        const enLabel = a.energy >= 75 ? 'High ✅' : a.energy >= 50 ? 'Good' : a.energy >= 30 ? 'Low' : 'Very low';
+        blocks.push(twoCol(`🔊 *Loudness*\n${loudnessLabel(a.lufs)}`, `🎚️ *Stereo*\n${stLabel}`));
+        blocks.push(twoCol(`🎤 *Vocals*\n${vcLabel}`, `⚡ *Energy*\n${enLabel}`));
       } else {
-        blocks.push(twoCol(`⚡ *Energy*\n${a.energy}%`, `🌈 *Brightness*\n${a.brightness}`));
+        const enLabel = a.energy >= 75 ? 'High ✅' : a.energy >= 50 ? 'Good' : 'Low';
+        blocks.push(twoCol(`⚡ *Energy*\n${enLabel}`, `🌈 *Brightness*\n${a.brightness}`));
       }
       blocks.push(actions([btn('🆚 Compare', 'quick_compare', 'primary'), btn('🎚️ Feedback', 'quick_feedback')]));
       blocks.push(divider());
@@ -1433,22 +1436,28 @@ function startScheduler(client) {
         const p = global.dawGuruProfiles[userId];
         if (!p?.daw || !p?.level || p.paused) continue;
         console.log(`🎓 DAW Guru tip → ${userId} (${p.daw} / ${p.level})`);
-        const tip = await getDawGuruTip(p.daw, p.level, p.focus);
+        const tip = await getDawGuruTip(p.daw, p.level, p.style);
         if (!tip) continue;
         const li = DAW_LEVELS[p.level] || DAW_LEVELS.intermediate;
+        // Increment lesson count and persist
+        global.dawGuruProfiles[userId].tipsCount = (p.tipsCount || 0) + 1;
+        global.dawGuruProfiles[userId].lastTip = new Date().toISOString();
+        saveDawGuru(global.dawGuruProfiles);
         await client.chat.postMessage({
           channel: userId,
-          text: 'DAW Guru daily tip',
+          text: 'DAW Guru daily lesson',
           blocks: [
-            header(`🎓 Daily ${p.daw} Tip`),
-            section(`${li.emoji} *${li.label} level${p.focus ? ` · ${p.focus}` : ''}*`),
+            header(`🎓 Daily ${p.daw} Lesson`),
+            section(`${li.emoji} *${li.label} level${p.style ? ` · ${p.style}` : ''}*`),
             divider(),
             section(tip),
             divider(),
-            section('*Want to practice?*\n`/wavmind daw guru tip` — Another tip\n`/wavmind daw guru set focus [area]` — Change focus\n`/wavmind daw guru set level [level]` — Update level'),
-            ctx('🎓 DAW Guru · Daily tips · Type `/wavmind daw guru stop` to pause'),
+            actions([btn('🎓 Another Lesson', 'guru_tip_now'), btn('⚙️ Settings', 'guru_status')]),
+            ctx(`🎓 Lesson ${global.dawGuruProfiles[userId].tipsCount} · Daily at 9am · Tap Settings to pause`),
           ],
         });
+        // Refresh home tab so lesson count updates
+        try { await publishAppHome(client, userId); } catch (e) {}
       }
     } catch (e) { console.error('DAW Guru scheduler:', e.message); }
   };
