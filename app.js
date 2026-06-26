@@ -172,7 +172,7 @@ function loudnessLabel(lufs) {
 async function askAI(prompt) {
   try {
     const r = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
+      model: 'llama-3.3-70b-versatile',
       messages: [
         { role: 'system', content: 'You are Wavmind, expert AI for music producers. Format using Slack mrkdwn. Use *bold*, • bullets. Never use ** or # headers.' },
         { role: 'user', content: prompt },
