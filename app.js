@@ -620,9 +620,9 @@ app.action('samples_open', async ({ body, ack, client }) => {
       section(`*${sounds.length} sounds found* — Creative Commons · _Run again for different results_`),
       divider(),
     ];
-    sounds.slice(0, 6).forEach((s, i) => {
+    sounds.forEach((s, i) => {
       bl.push(section(`*${i+1}. ${s.name}*\n⏱️ ${s.duration}s · ⭐ ${s.rating}/5 · 📥 ${s.downloads.toLocaleString()}\n📄 ${s.license} · 👤 ${s.username}\n${s.preview ? `🔊 *<${s.preview}|▶ Listen>*     ` : ''}🔗 *<${s.url}|📥 Download>*`));
-      if (i < 5) bl.push(divider());
+      if (i < sounds.length - 1) bl.push(divider());
     });
     if (tip) bl.push(divider(), section(`💡 *Tip:* ${tip}`));
     bl.push(divider(), actions([btn('🔄 More Results', `samples_${genre}`), btn('← All Genres', 'samples_open')]));
@@ -1204,9 +1204,9 @@ app.message(async ({ message, say, client }) => {
       const sounds = await searchFreesound(q, userId);
       if (!sounds?.length) { await say({ text: 'No results', blocks: [header('🎵 Nothing Found — Yet'), section(`No sounds matched *"${q}"*. Try a broader word like drums, piano, bass, or synth.`)] }); return; }
       const bl = [header(`🎵 Free Samples: "${q}"`), section(`*${sounds.length} sounds* — all free`), divider()];
-      sounds.slice(0, 5).forEach((s, i) => {
+      sounds.forEach((s, i) => {
         bl.push(section(`*${i+1}. ${s.name}*\n⏱️ ${s.duration}s · ⭐ ${s.rating}/5\n${s.preview ? `🔊 *<${s.preview}|▶ Listen>*     ` : ''}🔗 *<${s.url}|📥 Download>*`));
-        if (i < 4) bl.push(divider());
+        if (i < sounds.length - 1) bl.push(divider());
       });
       await say({ text: 'Samples', blocks: bl });
       return;
