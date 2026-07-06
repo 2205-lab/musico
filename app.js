@@ -1183,12 +1183,86 @@ app.event('app_home_opened', async ({ event, client }) => {
   await publishAppHome(client, event.user);
 });
 
-// ─── CHANNEL MONITORING ───────────────────────────────────
-app.message(async ({ message, say }) => {
+// ─── CHANNEL MONITORING + NATURAL LANGUAGE ROUTING ────────
+app.message(async ({ message, say, client }) => {
   if (message.subtype || !message.text) return;
   const lower = message.text.toLowerCase().trim();
-  if (['hi','hello','hey','start','help'].includes(lower)) {
+  const userId = message.user;
+  if (['hi','hello','hey','start','help','menu'].includes(lower)) {
     await say({ text: 'Wavmind', blocks: getWelcomeBlocks() });
+    return;
+  }
+
+  // ── NATURAL LANGUAGE ROUTING (DMs only — no slash command needed) ──
+  const isDM = message.channel_type === 'im';
+  if (isDM) {
+    // "find piano samples" / "get me drum loops" → samples
+    const sampleMatch = lower.match(/(?:find|get|search|need|want|give)\s+(?:me\s+)?(?:some\s+)?(.+?)\s*(?:samples?|loops?|sounds?)\s*$/);
+    if (sampleMatch || /^samples?\s+\w+/.test(lower)) {
+      const q = sampleMatch ? sampleMatch[1].trim() : lower.replace(/^samples?\s+/, '').trim();
+      await say({ text: 'Searching', blocks: [section(`🔍 Finding *"${q}"* samples...`), ctx('⏳ Different results every search')] });
+      const sounds = await searchFreesound(q, userId);
+      if (!sounds?.length) { await say({ text: 'No results', blocks: [header('🎵 Nothing Found — Yet'), section(`No sounds matched *"${q}"*. Try a broader word like drums, piano, bass, or synth.`)] }); return; }
+      const bl = [header(`🎵 Free Samples: "${q}"`), section(`*${sounds.length} sounds* — all free`), divider()];
+      sounds.slice(0, 5).forEach((s, i) => {
+        bl.push(section(`*${i+1}. ${s.name}*\n⏱️ ${s.duration}s · ⭐ ${s.rating}/5\n${s.preview ? `🔊 *<${s.preview}|▶ Listen>*     ` : ''}🔗 *<${s.url}|📥 Download>*`));
+        if (i < 4) bl.push(divider());
+      });
+      await say({ text: 'Samples', blocks: bl });
+      return;
+    }
+    // "compare my track" → start compare session
+    if (/compare\s+(my\s+)?(track|beat|mix|song)/.test(lower) || lower === 'compare') {
+      startCompareSession(userId);
+      await say({ text: 'Compare started', blocks: [header('🆚 Mix Comparison Started!'), section('*Step 1* — Upload YOUR track\n*Step 2* — Upload your REFERENCE track\n\nWavmind compares automatically.'), ctx('Cancel: `/wavmind cancel`')] });
+      return;
+    }
+    // "give me feedback" / "feedback on my mix" → feedback flow
+    if (/(?:give|get|want|need).{0,15}feedback|feedback\s+on/.test(lower) || lower === 'feedback') {
+      const stored = global.pendingAnalysis?.[userId];
+      if (stored && !stored.error) {
+        const r = await askAI(`Professional mixing engineer. Real measured data for "${stored.filename}": ${describeAnalysis(stored)}. Give specific mix feedback with real plugin names. Under 200 words.`);
+        await say({ text: 'Feedback', blocks: [header('🎚️ Mix Feedback'), section(`*${stored.filename}*`), divider(), section(r || 'Error')] });
+      } else {
+        await say({ text: 'Feedback', blocks: [header('🎚️ Mix Feedback'), section('Upload an MP3 or WAV first — I\'ll scan it and give feedback from the real audio data.')] });
+      }
+      return;
+    }
+    // "teach me fl studio" / "learn ableton" → DAW Guru
+    if (/(?:teach|learn|lessons?|tutor)\b/.test(lower) && !lower.includes('http')) {
+      const p = global.dawGuruProfiles[userId];
+      if (!p?.daw || !p?.level) { await say({ text: 'DAW Guru', blocks: getGuruDAWBlocks() }); }
+      else { await say({ text: 'DAW Guru', blocks: getGuruActiveBlocks(p) }); }
+      return;
+    }
+    // "what's new in trap" / "new releases" → Spotify releases
+    const relMatch = lower.match(/(?:what'?s?\s+new|new\s+(?:releases?|music|songs?|tracks?))\s*(?:in\s+)?(\w+)?/);
+    if (relMatch) {
+      const genre = relMatch[1] && RELEASE_POOLS[relMatch[1]] ? relMatch[1] : null;
+      const releases = await getNewReleases(genre);
+      if (releases?.length) {
+        const bl = [header(`🆕 New Releases${genre ? ` — ${genre}` : ''}`), divider()];
+        releases.slice(0, 5).forEach((rel, i) => { bl.push(section(`*${i+1}. ${rel.name}*\n👤 ${rel.artist}  📅 ${rel.releaseDate}\n🎵 *<${rel.url}|▶ Listen>*`)); if (i < 4) bl.push(divider()); });
+        await say({ text: 'New releases', blocks: bl });
+      } else {
+        await say({ text: 'Error', blocks: [section('🎵 Spotify is taking a nap — try again in a moment.')] });
+      }
+      return;
+    }
+    // "add project X" / "start project X" → project tracker
+    const projMatch = message.text.match(/(?:add|start|new)\s+(?:a\s+)?project\s+(.+)/i) || message.text.match(/^project\s+add\s+(.+)/i);
+    if (projMatch) {
+      const name = projMatch[1].trim();
+      if (!global.userProjects[userId]) global.userProjects[userId] = [];
+      global.userProjects[userId].push({ id: Date.now(), name, createdAt: new Date().toISOString(), done: false, notes: [], reminders: true });
+      saveProjects(global.userProjects);
+      await say({ text: 'Added', blocks: [header('📌 Project Added'), section(`*"${name}"* is now being tracked.\n\nDaily reminders will keep you on it.`)] });
+      try { await publishAppHome(client, userId); } catch (e) {}
+      return;
+    }
+    // Any other DM → AI answer (never leave a DM unanswered)
+    const r = await askAI(`You are Wavmind, expert AI for music producers. Answer: "${message.text}"`);
+    if (r) await say({ text: 'Wavmind', blocks: [section(r), ctx('💡 Try: "find piano samples" · "compare my track" · "teach me fl studio" · `/wavmind` for the full menu')] });
     return;
   }
   const kws = ['muddy','808','sidechain','compress','reverb','mixing','mastering','plugin','vst','fl studio','ableton','logic pro','melody','chord','bass line','hi-hat','kick','snare','bpm'];
