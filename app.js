@@ -504,8 +504,7 @@ function getFeedbackBlocks() {
     header('🎚️ Get Feedback'),
     divider(),
     section('*🎚️ Mix Feedback*\n`/wavmind feedback my trap beat at 140bpm feels muddy`'),
-    section('*🎛️ Deep Mix Analysis*\nUpload your audio first, then:\n`/wavmind feedback bpm:140 key:F_minor`'),
-    section('*🎯 Label Evaluation*\n`/wavmind label dark trap 140bpm heavy 808s`'),
+    section('*🎛️ Deep Mix Analysis*\nUpload your audio first, then:\n`/wavmind feedback`'),
     section('*🎤 Artist Comparison*\n`/wavmind artist Drake and Travis Scott`'),
     divider(),
     actions([btn('← Back', 'menu_main')]),
@@ -742,9 +741,9 @@ ${f.key}`),
       twoCol(`⚡ *Energy*
 ${f.energy}%`, `💃 *Danceability*
 ${f.danceability}%`),
-      twoCol(`🔥 *Popularity*
-${f.popularity}%`, `😊 *Mood*
-${f.mood}`),
+      twoCol(`😊 *Mood*
+${f.mood}`, `📅 *Released*
+${f.releaseDate || '—'}`),
       divider(),
       section('🎛️ *How to sound like this:*'),
       section(ai || 'Error generating blueprint.'),
@@ -1592,7 +1591,7 @@ app.command('/wavmind', async ({ command, ack, respond, client }) => {
     const f = await getTrackFeatures(q);
     if (f) {
       const r = await askAI(`How to achieve sound of ${f.name} by ${f.artist}: BPM ${f.bpm}, Key ${f.key}, Energy ${f.energy}%, Mood ${f.mood}. Specific techniques + real plugins.`);
-      await send([header('🎵 Reference Analysis'), section(`*${f.name}* by *${f.artist}*`), divider(), section('📊 *Track Data*'), twoCol(`🥁 *BPM*\n${f.bpm}`, `🎵 *Key*\n${f.key}`), twoCol(`⚡ *Energy*\n${f.energy}%`, `💃 *Danceability*\n${f.danceability}%`), twoCol(`🔥 *Popularity*\n${f.popularity}%`, `😊 *Mood*\n${f.mood}`), divider(), section('🎛️ *How to achieve this sound:*'), section(r || 'Error'), divider(), ctx('Type `/wavmind compare` to compare your track against this')], 'Reference');
+      await send([header('🎵 Reference Analysis'), section(`*${f.name}* by *${f.artist}*`), divider(), section('📊 *Track Data*'), twoCol(`🥁 *BPM*\n${f.bpm}`, `🎵 *Key*\n${f.key}`), twoCol(`⚡ *Energy*\n${f.energy}%`, `💃 *Danceability*\n${f.danceability}%`), twoCol(`😊 *Mood*\n${f.mood}`, `📅 *Released*\n${f.releaseDate || '—'}`), divider(), section('🎛️ *How to achieve this sound:*'), section(r || 'Error'), divider(), ctx('Type `/wavmind compare` to compare your track against this')], 'Reference');
     } else {
       const r = await askAI(`Production blueprint for "${q}". Tempo, key, drums, bass, melody, mix approach.`);
       await send([header('🎵 Reference Analysis'), section(`*${q}*`), divider(), section(r || 'Error')], 'Reference');
@@ -1754,7 +1753,7 @@ Be direct and specific. Use the actual numbers.`;
     const t=input.slice(5).trim(); const s=getCollabSession(command.channel_id);
     if (!s) { await send([header('🤝 No Session Running'), section('Start a collab session first, then log ideas, notes and decisions with your team.\n\n`/wavmind collab Dark Trap EP`'), ctx('💡 Works best in a shared channel with your team')], 'No session'); return; }
     s.feedback.push({ text: t, user: userId, time: new Date().toISOString() });
-    await respond({ response_type:'in_channel', text:'Note logged', blocks:[header('📝 Note Logged'),section(`*"${t}"*\n— <@${userId}>`),ctx(`${s.feedback.length} notes for "${s.trackName()}"`)] });
+    await respond({ response_type:'in_channel', text:'Note logged', blocks:[header('📝 Note Logged'),section(`*"${t}"*\n— <@${userId}>`),ctx(`${s.feedback.length} notes for "${s.trackName}"`)] });
     return;
   }
   if (lower.startsWith('decided ')) {
